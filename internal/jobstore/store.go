@@ -74,13 +74,16 @@ func (m *Memory) Get(_ context.Context, id string) (*Job, error) {
 	return &j, nil
 }
 
-// DeleteExpired removes jobs whose ExpiresAt is non-zero and <= now.
+// DeleteExpired removes terminal jobs (completed / failed) whose ExpiresAt
+// is non-zero and <= now. In-flight jobs are preserved even if expired so
+// callers can still poll a long-running task.
 func (m *Memory) DeleteExpired(_ context.Context, now int64) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var n int64
 	for id, j := range m.jobs {
-		if j.ExpiresAt > 0 && j.ExpiresAt <= now {
+		if j.ExpiresAt > 0 && j.ExpiresAt <= now &&
+			(j.Status == "completed" || j.Status == "failed") {
 			delete(m.jobs, id)
 			n++
 		}

@@ -148,7 +148,13 @@ FROM jobs WHERE local_id = ?`, id)
 }
 
 func (s *LibSQL) DeleteExpired(ctx context.Context, now int64) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM jobs WHERE expires_at > 0 AND expires_at <= ?`, now)
+	// Only sweep terminal jobs. An in-flight job (queued / in_progress) might
+	// still get a real status update from upstream — deleting it mid-flight
+	// would 404 the client even though the work is still happening.
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM jobs WHERE expires_at > 0 AND expires_at <= ? AND status IN ('completed', 'failed')`,
+		now,
+	)
 	if err != nil {
 		return 0, err
 	}

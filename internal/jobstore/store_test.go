@@ -98,11 +98,19 @@ func TestLibSQL_Persistence(t *testing.T) {
 
 func runExpireSuite(t *testing.T, s Store) {
 	ctx := context.Background()
-	// Seed: one expired, one not-yet-expired, one with ExpiresAt=0 (never expire)
+	// Seed:
+	//   "expired-completed" — terminal & expired → SHOULD be deleted
+	//   "expired-failed"    — terminal & expired → SHOULD be deleted
+	//   "expired-inflight"  — expired BUT still queued → MUST NOT be deleted
+	//                         (jobs in-flight can run longer than retention)
+	//   "fresh"             — not expired → MUST NOT be deleted
+	//   "forever"           — ExpiresAt=0   → MUST NOT be deleted
 	jobs := []*Job{
-		{LocalID: "expired", Kind: KindVideo, Model: "x", VendorPath: "p", VendorTaskID: "vt-1", CreatedAt: 1, ExpiresAt: 50, Status: "completed"},
-		{LocalID: "fresh", Kind: KindVideo, Model: "x", VendorPath: "p", VendorTaskID: "vt-2", CreatedAt: 1, ExpiresAt: 1000, Status: "queued"},
-		{LocalID: "forever", Kind: KindMusic, Model: "x", VendorPath: "p", VendorTaskID: "vt-3", CreatedAt: 1, ExpiresAt: 0, Status: "queued"},
+		{LocalID: "expired-completed", Kind: KindVideo, Model: "x", VendorPath: "p", VendorTaskID: "vt-1", CreatedAt: 1, ExpiresAt: 50, Status: "completed"},
+		{LocalID: "expired-failed", Kind: KindVideo, Model: "x", VendorPath: "p", VendorTaskID: "vt-2", CreatedAt: 1, ExpiresAt: 50, Status: "failed"},
+		{LocalID: "expired-inflight", Kind: KindVideo, Model: "x", VendorPath: "p", VendorTaskID: "vt-3", CreatedAt: 1, ExpiresAt: 50, Status: "queued"},
+		{LocalID: "fresh", Kind: KindVideo, Model: "x", VendorPath: "p", VendorTaskID: "vt-4", CreatedAt: 1, ExpiresAt: 1000, Status: "queued"},
+		{LocalID: "forever", Kind: KindMusic, Model: "x", VendorPath: "p", VendorTaskID: "vt-5", CreatedAt: 1, ExpiresAt: 0, Status: "queued"},
 	}
 	for _, j := range jobs {
 		if err := s.Put(ctx, j); err != nil {
@@ -114,12 +122,18 @@ func runExpireSuite(t *testing.T, s Store) {
 	if err != nil {
 		t.Fatalf("delete expired: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("expected 1 deletion, got %d", n)
+	if n != 2 {
+		t.Fatalf("expected 2 deletions (terminal expired only), got %d", n)
 	}
 
-	if g, _ := s.Get(ctx, "expired"); g != nil {
-		t.Fatal("expired job still present")
+	if g, _ := s.Get(ctx, "expired-completed"); g != nil {
+		t.Fatal("expired+completed job should have been deleted")
+	}
+	if g, _ := s.Get(ctx, "expired-failed"); g != nil {
+		t.Fatal("expired+failed job should have been deleted")
+	}
+	if g, _ := s.Get(ctx, "expired-inflight"); g == nil {
+		t.Fatal("expired but in-flight (queued) job MUST NOT be deleted")
 	}
 	if g, _ := s.Get(ctx, "fresh"); g == nil {
 		t.Fatal("fresh job missing")

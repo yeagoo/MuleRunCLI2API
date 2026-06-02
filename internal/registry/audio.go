@@ -11,24 +11,46 @@ func IsMusic(modelID string) bool {
 
 func init() {
 	// ---- MiniMax text-to-speech -----------------------------------------
+	//
+	// Mulerun's upstream API expects nested objects:
+	//   voice_setting: { voice_id, speed, vol, pitch, emotion, language_boost }
+	//   audio_setting: { format, sample_rate, bitrate }
+	//   english_normalization, output_format: top-level
+	//
+	// Verified against @mulerouter/core 0.5.0 buildSpeechRequestBody().
+	// Sending these flat → upstream returns 400
+	// "voice_setting expected to be provided".
 	speechMapper := func(in AudioInput) (map[string]any, error) {
 		text := firstNonEmpty(in.Input, in.Prompt)
-		voice := firstNonEmpty(in.VoiceID, in.Voice)
 		out := map[string]any{
-			"prompt":   text,
-			"voice_id": voice,
+			"prompt": text,
 		}
-		putNonEmpty(out, "emotion", in.Emotion)
-		putNonEmpty(out, "language_boost", in.LanguageBoost)
-		putNonEmpty(out, "audio_format", firstNonEmpty(in.AudioFormat, in.ResponseFormat))
-		putNonNilFloat(out, "speed", in.Speed)
-		putNonNilFloat(out, "vol", in.Vol)
-		putNonNilInt(out, "pitch", in.Pitch)
-		putNonNilInt(out, "sample_rate", in.SampleRate)
-		putNonNilInt(out, "bitrate", in.Bitrate)
+
+		voiceSetting := map[string]any{}
+		if v := firstNonEmpty(in.VoiceID, in.Voice); v != "" {
+			voiceSetting["voice_id"] = v
+		}
+		putNonNilFloat(voiceSetting, "speed", in.Speed)
+		putNonNilFloat(voiceSetting, "vol", in.Vol)
+		putNonNilInt(voiceSetting, "pitch", in.Pitch)
+		putNonEmpty(voiceSetting, "emotion", in.Emotion)
+		putNonEmpty(voiceSetting, "language_boost", in.LanguageBoost)
+		if len(voiceSetting) > 0 {
+			out["voice_setting"] = voiceSetting
+		}
+
+		audioSetting := map[string]any{}
+		if f := firstNonEmpty(in.AudioFormat, in.ResponseFormat); f != "" {
+			audioSetting["format"] = f
+		}
+		putNonNilInt(audioSetting, "sample_rate", in.SampleRate)
+		putNonNilInt(audioSetting, "bitrate", in.Bitrate)
+		if len(audioSetting) > 0 {
+			out["audio_setting"] = audioSetting
+		}
+
 		putNonNilBool(out, "english_normalization", in.EnglishNormalization)
-		// Always ask upstream for a URL — the handler then either streams the
-		// bytes back (OpenAI-shape) or returns the URL JSON.
+		// Always ask upstream for a URL — the handler then streams bytes back.
 		out["output_format"] = "url"
 		mergeExtra(out, in.Extra)
 		return out, nil
@@ -42,14 +64,26 @@ func init() {
 	}
 
 	// ---- MiniMax text-to-music ------------------------------------------
+	//
+	// Same nesting pattern: audio_format / sample_rate / bitrate go inside
+	// audio_setting (not flat). Verified against
+	// @mulerouter/core buildMusicRequestBody().
 	musicMapper := func(in AudioInput) (map[string]any, error) {
 		out := map[string]any{}
 		putNonEmpty(out, "prompt", firstNonEmpty(in.Prompt, in.Input))
 		putNonEmpty(out, "lyrics_prompt", in.LyricsPrompt)
 		putNonNilBool(out, "lyrics_optimizer", in.LyricsOptimizer)
-		putNonEmpty(out, "audio_format", firstNonEmpty(in.AudioFormat, in.ResponseFormat))
-		putNonNilInt(out, "sample_rate", in.SampleRate)
-		putNonNilInt(out, "bitrate", in.Bitrate)
+
+		audioSetting := map[string]any{}
+		if f := firstNonEmpty(in.AudioFormat, in.ResponseFormat); f != "" {
+			audioSetting["format"] = f
+		}
+		putNonNilInt(audioSetting, "sample_rate", in.SampleRate)
+		putNonNilInt(audioSetting, "bitrate", in.Bitrate)
+		if len(audioSetting) > 0 {
+			out["audio_setting"] = audioSetting
+		}
+
 		mergeExtra(out, in.Extra)
 		return out, nil
 	}

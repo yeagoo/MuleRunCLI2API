@@ -85,14 +85,39 @@ func TestAudio_SpeechMaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got["prompt"] != "hello world" || got["voice_id"] != "Charming_Lady" {
-		t.Fatalf("required mapping wrong: %+v", got)
+	if got["prompt"] != "hello world" {
+		t.Fatalf("prompt: %+v", got)
+	}
+	vs, ok := got["voice_setting"].(map[string]any)
+	if !ok {
+		t.Fatalf("voice_setting missing/wrong type: %+v", got)
+	}
+	if vs["voice_id"] != "Charming_Lady" || vs["emotion"] != "happy" {
+		t.Fatalf("voice_setting wrong: %+v", vs)
 	}
 	if got["output_format"] != "url" {
 		t.Fatalf("output_format should be forced to url, got %v", got["output_format"])
 	}
-	if got["emotion"] != "happy" {
-		t.Fatalf("emotion: %v", got["emotion"])
+}
+
+func TestAudio_SpeechAudioSetting(t *testing.T) {
+	m, _ := Get("speech-2.8-turbo")
+	rate := 24000
+	got, err := m.MapAudio(AudioInput{
+		Input:          "x",
+		Voice:          "vox",
+		ResponseFormat: "mp3",
+		SampleRate:     &rate,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	as, ok := got["audio_setting"].(map[string]any)
+	if !ok {
+		t.Fatalf("audio_setting missing: %+v", got)
+	}
+	if as["format"] != "mp3" || as["sample_rate"] != 24000 {
+		t.Fatalf("audio_setting fields wrong: %+v", as)
 	}
 }
 
@@ -104,15 +129,25 @@ func TestAudio_MusicMaps(t *testing.T) {
 	if !IsMusic(m.ID) {
 		t.Fatal("IsMusic should be true for music-2.5")
 	}
+	rate := 44100
 	got, err := m.MapAudio(AudioInput{
 		Prompt:       "synthwave, melodic, upbeat",
 		LyricsPrompt: "[verse]\nlight the night",
+		AudioFormat:  "mp3",
+		SampleRate:   &rate,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got["prompt"] == nil || got["lyrics_prompt"] == nil {
 		t.Fatalf("expected prompt + lyrics_prompt, got %+v", got)
+	}
+	as, ok := got["audio_setting"].(map[string]any)
+	if !ok {
+		t.Fatalf("audio_setting missing: %+v", got)
+	}
+	if as["format"] != "mp3" || as["sample_rate"] != 44100 {
+		t.Fatalf("audio_setting fields wrong: %+v", as)
 	}
 	if _, has := got["output_format"]; has {
 		t.Fatalf("music should not force output_format, got %v", got["output_format"])

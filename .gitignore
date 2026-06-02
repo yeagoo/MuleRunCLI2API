@@ -16,3 +16,6 @@
 *.test
 *.out
 coverage.txt
+
+# Python venv for e2e test script
+.venv/
