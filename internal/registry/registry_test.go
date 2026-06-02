@@ -313,8 +313,7 @@ func TestMergeExtra_OverridesMapperValue(t *testing.T) {
 		Input: "hi",
 		Voice: "Default",
 		Extra: map[string]any{
-			"voice_setting":  map[string]any{"voice_id": "Override", "speed": 2.0},
-			"output_format":  "hex",
+			"voice_setting": map[string]any{"voice_id": "Override", "speed": 2.0},
 		},
 	})
 	if err != nil {
@@ -327,8 +326,25 @@ func TestMergeExtra_OverridesMapperValue(t *testing.T) {
 	if vs["voice_id"] != "Override" {
 		t.Fatalf("expected extra.voice_setting to override mapper, got %+v", vs)
 	}
-	if got["output_format"] != "hex" {
-		t.Fatalf("expected extra.output_format to override 'url', got %v", got["output_format"])
+}
+
+func TestSpeechMapper_OutputFormatLocked(t *testing.T) {
+	// cc review round-2 finding A: output_format=url is a handler contract
+	// (streamAudio fetches the URL). It MUST NOT be overridable via extra,
+	// or speech requests would crash on hex-string-as-URL.
+	m, _ := Get("speech-2.8-hd")
+	got, err := m.MapAudio(AudioInput{
+		Input: "hi",
+		Voice: "Default",
+		Extra: map[string]any{
+			"output_format": "hex", // attempted override
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["output_format"] != "url" {
+		t.Fatalf("output_format must stay 'url' regardless of extra; got %v", got["output_format"])
 	}
 }
 

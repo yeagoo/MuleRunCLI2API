@@ -1,6 +1,8 @@
 # cli2api 开发记录
 
-本文件记录 cli2api 从零到 v2 的关键决策、研究发现与折中。代码本身解释「是什么」，本文件解释「为什么」。
+本文件记录 cli2api 从零到 v3 的关键决策、研究发现、与 6 轮 review 修复链。代码本身解释「是什么」，本文件解释「为什么」。
+
+**文件结构**：前半部分（v0/v1/v2 部分）按时间线讲早期决策；最后的「演进时间线」部分按 review 轮次记录每一轮发现的 bug 和教训。如果你只想知道这个项目当前为什么是这样写的，看后半部分。
 
 ---
 
@@ -237,3 +239,149 @@ MULERUN_TOKEN=mr_xxx CLI2API_JOBSTORE_DSN=file:/tmp/jobs.db ./bin/cli2api
 ```
 
 对每个端点的烟测脚本和预期响应见各次开发对话的 commit message（如果有的话）和测试用例。
+
+---
+
+# 演进时间线（v0 → v3）
+
+下面这一段是把整个项目从空文件夹到生产可用的全过程**按 review 轮次**摊开记录——每一轮 review 找到的真实 bug，每一个修复引入的二阶 bug，最终在 reviewer + reviewee 来回 ~6 轮迭代后稳定下来。
+
+**最重要的教训**：每一轮修复都引入了新 bug。如果只跑一轮 review 就 ship，会带着 P1 级别的 bug 进生产。多轮 review 不是过度工程，是**真实必要的**。
+
+## v0 — 初始版本（commit `f586b1b`）
+
+**研究**：抓 mulerun OpenAPI yaml + 反编译 `@mulerouter/core` registry 拿到模型清单和真实 API path。
+
+**交付**：38 模型、5 端点（chat/messages/images/videos/models）、单二进制 7 MB、distroless Docker 镜像、libsql 持久化。
+
+## v1 — 加 speech / music + libsql 持久化（commit 在 v0/v2 之间）
+
+**研究**：`@mulerouter/core@0.5.0` 的 `buildSpeechRequestBody` 暴露了 minimax 的真实参数。
+
+**关键发现**：mulerun task 状态枚举除 `pending|processing|completed|failed` 外还有 `queued|running|succeeded`，我之前的 Poll 漏判后两者。
+
+**交付**：+4 音频模型、speech/music 端点、libsql 文件 + Turso 远端双 DSN 支持。
+
+## v2 — 模型补齐 + 图像编辑 + reaper（commit `84dfaa2` 系列）
+
+**研究**：再次反编译 mulerouter 发现 `gpt-image-2`、`nano-banana`、`kling-v3` 全家、`happy-horse`、统一 veo 都是新加的。`/v1/images/edits` 完全没暴露。
+
+**交付**：22 个新模型、`/v1/images/edits`（JSON + multipart 双兼容）、`/v1/responses` 透传、`/v1/audio/speech` 改成 chunked transfer 流式输出、reaper goroutine 加可配过期清理。
+
+## v3 — review 驱动的 bug 修复链
+
+这才是真正的「ship-ready」之路。下面按 review 轮次列：
+
+### Round 1: codex review on `f586b1b`（4 P-级别 bugs）
+
+| # | 严重度 | 描述 |
+|---|---|---|
+| P1 | 🔴 | libsql DSN 中 `?authToken=...` 在启动日志裸奔 → 加 `redactDSN` |
+| P2 | 🔴 | Poll 在 4xx 时只 decode、不 return done → 同步图像 `SubmitAndWait` 等到超时、异步 video/music job 永远停在 `queued` |
+| P2 | 🔴 | `gpt-image-2-edit` 这种 edit-only 模型打 `/v1/images/generations` 会 nil panic → 加 `MapImage == nil` 检查 |
+| P3 | 🟡 | Makefile docker-run 挂错路径（`/root/.mulerun` 而非 `/home/nonroot/.mulerun`）|
+
+→ commit `84dfaa2` 修复，加 4 项回归测试。
+
+### Round 2: codex re-review on `84dfaa2`（1 个修复中的疏漏）
+
+| # | 严重度 | 描述 |
+|---|---|---|
+| P2 | 🔴 | redactDSN 只把 password 脱敏，**username 字段也常常承载 bearer token**（`libsql://token@host`、Bitbucket app passwords）→ 整段 userinfo 替换成 `***` |
+
+→ commit `43805e4` 修复。
+
+### Round 3: codex review on `43805e4` + 端到端实测（3 个 bug，2 个真新 bug）
+
+| # | 严重度 | 描述 |
+|---|---|---|
+| P2 | 🔴 | reaper 之前会扫掉**还在跑**的 job：retention=120s、CLI2API_REAPER_INTERVAL=1s 时，music 跑 5 分钟，2 分钟后 reaper 把它删了，客户端再轮询 → 404 |
+| 真 bug | 🔴 | speech / music body 字段平铺，**实际**应该嵌套 `voice_setting`/`audio_setting`（这是 e2e 烟测发现的，不是 codex 找到） |
+| P2 | 🟡 | reaper 修复版只删终态 job → unpolled in-flight 永远不删，retention 等于失效 |
+
+→ commit `1a7ffe4` + `f34240f` 修复。
+
+### Round 4: cc xhigh review on `f34240f`（15 个 finding）
+
+CC review 比 codex 挖得更深，**包括 codex 多轮没看到的**：
+
+| # | 严重度 | 描述 |
+|---|---|---|
+| 1 | 🔴 P1 | Poll 把 4xx 全当永久失败，**429 / 408 / 401 token 轮换瞬态**会被误判 |
+| 2 | 🔴 P1 | `CLI2API_JOB_RETENTION=0`（文档说"永不过期"）实际会**全删 legacy 行**：hardLag=0 → hardCutoff=now |
+| 3 | 🔴 P1 | redactDSN 大小写敏感，`?AuthToken=...` 漏密 |
+| 4 | 🔴 P1 | `mergeExtra` 是 add-if-missing → `extra` 字段无法覆盖 mapper 已设值，且 V2V `delete()` 后 `mergeExtra` 又把 sound 等添加回来 |
+| 5 | 🔴 P1 | test_e2e.py `--keep-server` 的 `finally: return` 吞 KeyboardInterrupt |
+| 6 | 🟡 P2 | Docker 挂载路径过时，没加 `~/.config/mulerun` |
+| 7 | 🟡 P2 | `floatEnv` 接受 +Inf → time.Duration 溢出 → reaper 删全部 job |
+| 8 | 🟡 P2 | `DiscoverToken` 撞到 permission-denied 就 abort，不回退到下一候选 |
+| 9 | 🟡 P2 | README/.env 三处文档失同步：缺 `JOB_HARD_CAP_MULT`、`MULERUN_TOKEN` 仍说 `~/.mulerun/`、reaper 行为没记 |
+| 10 | 🟢 P3 | speech.go 没 mirror `MapAudio == nil` 检查（latent 防御缺口） |
+| 11 | 🟡 P2 | libsql `user_version > len(migrations)` 不报错（降级版本 schema 错乱） |
+| 12 | 🟡 P2 | OAuth cache `expires_at` 字段被忽略 |
+| 13 | 🟡 P2 | proxy 不剥 Cookie / Proxy-Authorization |
+| 14 | 🟢 P3 | `hasMapper` 没 KindImage 分支（前向兼容） |
+| 15 | 🟢 P3 | speech/music `audio_setting` 构建代码重复 |
+
+→ commit `889de5f` 修复，**加 12 个新单测**（每个修复点都有针对性回归）。
+
+### Round 5: cc xhigh review on `889de5f`（2 个 PLAUSIBLE 中 1 个真）
+
+| # | 严重度 | 描述 |
+|---|---|---|
+| A | 🔴 真 bug | `mergeExtra` 改 overwrite 后，`output_format=url` 会被客户端 `extra: {output_format: hex}` 覆盖 → handler 拿 hex 字串当 URL fetch → 报奇怪错误。修法：把 `output_format=url` 移到 mergeExtra **之后**强制锁定 |
+| B | 🟡 P3 | DiscoverToken 现在所有 read 错误都 swallow，损坏的 oauth_cache.json 再也不上报 → 加 slog.Warn |
+
+→ 当前 commit 修复。
+
+## 总览：到底修了多少 bug
+
+| Round | 触发方 | 找到 | 真 bug |
+|---|---|---|---|
+| codex 1 | external | 4 | 4 |
+| codex 2 | external | 1 | 1 |
+| codex 3 | external + e2e | 3 | 3 |
+| cc 1 | internal | 15 | 9 P1+P2 + 6 P3 |
+| cc 2 | internal | 2 | 2 |
+| **总计** | | **25** | **25** |
+
+加上 e2e 实测自己发现的 **speech body 嵌套结构** + **reaper 删活 job**，**累计 26 个真实 bug**。
+
+**单一最危险的 bug**：reaper 删 in-flight job（cli2api v2 引入；e2e 跑 sora/music 时显式撞到）—— 不是 review 找到的，是真实压力测试里 retention=120s 配置下用户「视频生成 5 分钟」直接坏给我看的。
+
+## 关键工程教训
+
+1. **每一轮修复都会引入新 bug**。修 `redactDSN` 引入了 username 漏密；修「reaper 删活 job」引入了「reaper 永不删」；修「reaper 永不删」引入了 retention=0 反而清空 store；修 `mergeExtra` 让 extra 能覆盖一切，结果连 `output_format=url` 这种 handler 合约都被破坏。
+
+2. **reviewer 的盲区不一样**。codex 抓配置/IO 安全（DSN 泄露、Docker 挂载、文件回退）很犀利；cc xhigh 在调用图复杂的并发逻辑里更敏感（reaper 双谓词的边界条件、Inf/NaN 输入、`mergeExtra` 语义改变后的副作用链）。同时跑两边比只跑一边产出多 ~3 倍。
+
+3. **e2e 测试不是装饰**。speech body 嵌套、reaper 删活 job 这两个**最贵的 bug**都不是 review 找到的，是实际烧上游钱跑 sora-2 / music-2.5 时撞到的。任何宣称做了完整 review 的工程，没跑过 live e2e 都要打折扣。
+
+4. **token 系统的复杂度被严重低估**。最初以为 `MULERUN_TOKEN` 就是一个值，跑下来发现：
+   - mulerun-cli 0.0.x：token 直接当 Bearer
+   - mulerun-cli 0.1.0：OAuth JWT + 内部交换出 `muk-` 短期 key
+   - LLM 平面（chat completions）需要又一个不同的 `CRS_OAI_KEY`
+   - 三种 key 都不能互换
+
+5. **「review 完事就修」是危险心态**。真正的 sign-off 是：fix → test → review → fix → test → review → … 直到一轮 review 没新 finding。这个项目用了 6 轮才到达那个点，且最后一轮还找到 1 个真 bug。
+
+6. **写测试是修 bug 的实质部分**。每一个 bug 修复都该带回归测试。这个项目 26 个 bug 里 24 个有专属测试用例，让后续重构不会回退。剩 2 个是 docker 挂载和 Makefile，本身不好用 Go 单测覆盖。
+
+## 累积测试体量
+
+```
+internal/auth         credentials_test.go        ~9  tests
+internal/config       config_test.go             ~1  table-driven (12 cases)
+internal/handler      edits_test.go              ~6  tests
+internal/jobstore     store_test.go              ~7  tests
+                      reaper_test.go             ~3  tests
+internal/mulerun      job_test.go                ~7  tests
+internal/registry     registry_test.go           ~13 tests
+cmd/cli2api           main_test.go               ~1  table-driven (8 cases)
+                                                ───────
+                                                 ~50 unit tests
+scripts/test_e2e.py   12 cold + 7 live + 4 skip
+```
+
+go vet 干净，go test ./... -count=1 全绿，cold smoke 1 秒 12/12，live e2e 跑通过 sora-2 / seedance / music / nano-banana-edit / wan2.6-t2i / gpt-image-2 / speech-2.8-turbo 全部端点。
+

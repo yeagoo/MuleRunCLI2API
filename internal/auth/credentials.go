@@ -2,7 +2,9 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,10 +44,15 @@ func DiscoverToken() (token string, source string, err error) {
 	for _, path := range candidates {
 		t, perr := readTokenFile(path)
 		if perr != nil {
-			// Any read error (ENOENT, permission-denied, malformed JSON,
-			// etc.) is a "this file isn't usable, try the next one" signal.
-			// Hard-erroring here would leave the user stuck if e.g. one
-			// path is owned by root from an earlier sudo invocation.
+			// ENOENT is normal — that path just isn't populated.
+			// Other errors (permission denied, malformed JSON, truncated
+			// write from a crashed `mulerun login`) are noteworthy: log
+			// them at warn so a corrupt cache doesn't silently fall
+			// through to "no creds found", but don't abort the loop.
+			if !errors.Is(perr, os.ErrNotExist) {
+				slog.Warn("credential file unreadable, skipping",
+					"path", path, "err", perr)
+			}
 			continue
 		}
 		if t != "" {

@@ -61,9 +61,12 @@ func init() {
 		}
 
 		putNonNilBool(out, "english_normalization", in.EnglishNormalization)
-		// Always ask upstream for a URL — the handler then streams bytes back.
-		out["output_format"] = "url"
 		mergeExtra(out, in.Extra)
+		// Force output_format=url AFTER mergeExtra: streamAudio expects a
+		// downloadable URL in audios[0]. If a client smuggled
+		// extra:{output_format:"hex"}, mergeExtra would overwrite, then the
+		// handler would try to HTTP GET a hex literal. Lock it last.
+		out["output_format"] = "url"
 		return out, nil
 	}
 	for _, id := range []string{"speech-2.8-hd", "speech-2.8-turbo"} {
