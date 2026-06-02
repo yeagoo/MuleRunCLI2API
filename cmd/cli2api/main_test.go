@@ -12,7 +12,12 @@ func TestRedactDSN(t *testing.T) {
 		{"libsql://host.turso.io?authToken=secret123", "libsql://host.turso.io?authToken=%2A%2A%2A"},
 		{"libsql://host?authToken=secret&other=v", "libsql://host?authToken=%2A%2A%2A&other=v"},
 		{"https://host/db?jwt=abc", "https://host/db?jwt=%2A%2A%2A"},
-		{"libsql://user:pw@host?authToken=secret", "libsql://user:%2A%2A%2A@host?authToken=%2A%2A%2A"},
+		// Userinfo: drop ENTIRE userinfo, never preserve the username — the
+		// username slot is a common place to put bearer tokens (Turso, GitHub,
+		// Bitbucket); preserving it would still leak the secret.
+		{"libsql://supersecrettoken@host", "libsql://%2A%2A%2A@host"},
+		{"https://apikey:supersecret@host/db", "https://%2A%2A%2A@host/db"},
+		{"libsql://user:pw@host?authToken=secret", "libsql://%2A%2A%2A@host?authToken=%2A%2A%2A"},
 		{"libsql://host", "libsql://host"},
 	}
 	for _, c := range cases {

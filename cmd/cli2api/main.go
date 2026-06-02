@@ -96,9 +96,10 @@ func openJobStore(dsn string) (jobstore.Store, string, error) {
 }
 
 // redactDSN strips secrets from a libsql/HTTP DSN so it's safe to log.
-// Drops the userinfo and replaces any sensitive query params (authToken,
-// auth_token, jwt, password) with "***". File paths and bare paths pass
-// through unchanged.
+// Drops userinfo entirely (the username field is often used to carry bearer
+// tokens, e.g. `libsql://token@host`) and replaces sensitive query params
+// (authToken, auth_token, jwt, password) with "***". File paths and bare
+// paths pass through unchanged.
 func redactDSN(dsn string) string {
 	if strings.HasPrefix(dsn, "file:") || !strings.Contains(dsn, "://") {
 		return dsn
@@ -112,7 +113,9 @@ func redactDSN(dsn string) string {
 		return "***"
 	}
 	if u.User != nil {
-		u.User = url.UserPassword(u.User.Username(), "***")
+		// Both username and password can carry secrets; drop the whole
+		// userinfo and replace with a marker so the existence is visible.
+		u.User = url.User("***")
 	}
 	q := u.Query()
 	for _, key := range []string{"authToken", "auth_token", "jwt", "password"} {
