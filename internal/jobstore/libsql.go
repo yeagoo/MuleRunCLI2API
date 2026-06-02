@@ -89,6 +89,12 @@ func (s *LibSQL) migrate() error {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&current); err != nil {
 		return fmt.Errorf("read user_version: %w", err)
 	}
+	// If the DB was written by a newer cli2api (user_version > what we know),
+	// refuse to start rather than reading/writing it with stale schema
+	// assumptions. The operator should either upgrade or roll back the DB.
+	if current > len(migrations) {
+		return fmt.Errorf("jobstore: db user_version=%d is newer than this binary supports (max=%d); upgrade cli2api or remove the db file", current, len(migrations))
+	}
 
 	for i := current; i < len(migrations); i++ {
 		if _, err := s.db.Exec(migrations[i]); err != nil {

@@ -185,10 +185,18 @@ func putNonEmptySlice[T any](out map[string]any, key string, vals []T) {
 	}
 }
 
+// mergeExtra forwards every key in `extra` into `out`, overwriting any
+// mapper-computed value for the same key. Rationale: the client's `extra`
+// field is the explicit escape hatch for forcing an upstream parameter that
+// our typed fields don't model — silently dropping it would make the override
+// path useless (clients couldn't, e.g., set voice_setting = {custom override}
+// for speech, or pass the raw upstream model name on aggregator endpoints).
+//
+// Mappers that need to drop unsupported keys (kling-omni v2v drops
+// aspect_ratio etc.) MUST run their delete() AFTER mergeExtra so the
+// final body still excludes them even if the client included them.
 func mergeExtra(out map[string]any, extra map[string]any) {
 	for k, v := range extra {
-		if _, exists := out[k]; !exists {
-			out[k] = v
-		}
+		out[k] = v
 	}
 }

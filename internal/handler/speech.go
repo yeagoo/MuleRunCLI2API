@@ -29,7 +29,7 @@ func Speech(d Deps) http.HandlerFunc {
 			return
 		}
 		m, ok := registry.Get(in.Model)
-		if !ok || m.Kind != registry.KindAudio || registry.IsMusic(in.Model) {
+		if !ok || m.Kind != registry.KindAudio || registry.IsMusic(in.Model) || m.MapAudio == nil {
 			apierr.Write(w, apierr.StyleOpenAI, http.StatusNotFound, "unknown speech model: "+in.Model, "model_not_found")
 			return
 		}

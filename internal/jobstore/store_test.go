@@ -220,3 +220,24 @@ VALUES ('legacy', 'video', 'sora', 'p', 'vt', 100, 'completed', '["https://x/v.m
 		t.Fatalf("legacy ExpiresAt should be 0 (default), got %d", got.ExpiresAt)
 	}
 }
+
+func TestLibSQL_RefusesNewerUserVersion(t *testing.T) {
+	// Review #11 regression: opening a DB with user_version > what this
+	// binary supports must error out instead of silently using the new
+	// schema with old code.
+	path := filepath.Join(t.TempDir(), "future.db")
+	driver, dsn := resolveDriver("file:" + path)
+	rawDB, err := sql.Open(driver, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rawDB.Exec(`PRAGMA user_version = 99`); err != nil {
+		t.Fatal(err)
+	}
+	rawDB.Close()
+
+	_, err = OpenLibSQL("file:" + path)
+	if err == nil {
+		t.Fatal("expected error when user_version exceeds known migrations")
+	}
+}

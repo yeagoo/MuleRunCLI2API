@@ -36,6 +36,8 @@ func (h asyncJobAPI) hasMapper(m registry.Model) bool {
 		return m.MapVideo != nil
 	case registry.KindAudio:
 		return m.MapAudio != nil
+	case registry.KindImage:
+		return m.MapImage != nil
 	default:
 		return false
 	}

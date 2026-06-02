@@ -76,7 +76,8 @@ func TestDiscoverToken_FromOAuthCache(t *testing.T) {
 	payload, _ := json.Marshal(map[string]any{
 		"access_token":  "from-oauth-cache",
 		"refresh_token": "ignored",
-		"expires_at":    1780410965,
+		// Far in the future so this test isn't time-dependent.
+		"expires_at": 4102444800, // 2100-01-01
 	})
 	if err := os.WriteFile(filepath.Join(dir, "oauth_cache.json"), payload, 0o600); err != nil {
 		t.Fatal(err)
@@ -127,6 +128,44 @@ func TestDiscoverToken_OAuthCachePreferredOverLegacy(t *testing.T) {
 	}
 }
 
+func TestDiscoverToken_SkipsExpiredOAuthCache(t *testing.T) {
+	// Review #12: an expired access_token in oauth_cache.json should be
+	// treated as missing so we fall through to other candidates.
+	home := t.TempDir()
+	t.Setenv("MULERUN_TOKEN", "")
+	t.Setenv("HOME", home)
+
+	newDir := filepath.Join(home, ".config", "mulerun")
+	if err := os.MkdirAll(newDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	expired, _ := json.Marshal(map[string]any{
+		"access_token": "stale",
+		"expires_at":   1, // Jan 1 1970
+	})
+	if err := os.WriteFile(filepath.Join(newDir, "oauth_cache.json"), expired, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Legacy path with a still-valid token.
+	oldDir := filepath.Join(home, ".mulerun")
+	if err := os.MkdirAll(oldDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "auth.json"),
+		[]byte(`{"token":"recovered"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tok, _, err := DiscoverToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok != "recovered" {
+		t.Fatalf("expected expired oauth_cache to be skipped, got %q", tok)
+	}
+}
+
 func TestDiscoverToken_FallbackChain(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("MULERUN_TOKEN", "")
@@ -150,5 +189,43 @@ func TestDiscoverToken_FallbackChain(t *testing.T) {
 	}
 	if tok != "fallback-token" {
 		t.Fatalf("want fallback-token, got %q", tok)
+	}
+}
+
+func TestDiscoverToken_SkipsUnreadableFile(t *testing.T) {
+	// Review #8 regression: an unreadable file (e.g. root-owned from a
+	// prior sudo) must NOT abort the whole discovery loop. Skip it and
+	// fall through to the next candidate.
+	home := t.TempDir()
+	t.Setenv("MULERUN_TOKEN", "")
+	t.Setenv("HOME", home)
+
+	// Place an unreadable file at the FIRST-priority path.
+	newDir := filepath.Join(home, ".config", "mulerun")
+	if err := os.MkdirAll(newDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cachePath := filepath.Join(newDir, "oauth_cache.json")
+	if err := os.WriteFile(cachePath, []byte(`{"access_token":"unreachable"}`), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(cachePath, 0o600) // let t.TempDir() clean up
+
+	// And a usable file at the legacy path.
+	oldDir := filepath.Join(home, ".mulerun")
+	if err := os.MkdirAll(oldDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "auth.json"),
+		[]byte(`{"token":"recovered"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tok, _, err := DiscoverToken()
+	if err != nil {
+		t.Fatalf("expected fall-through, got error: %v", err)
+	}
+	if tok != "recovered" {
+		t.Fatalf("expected fall-through to legacy path, got %q", tok)
 	}
 }

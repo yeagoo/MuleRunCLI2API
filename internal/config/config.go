@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -101,8 +102,14 @@ func floatEnv(key string, fallback float64) float64 {
 	if raw == "" {
 		return fallback
 	}
-	if f, err := strconv.ParseFloat(raw, 64); err == nil && f >= 1 {
-		return f
+	f, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return fallback
 	}
-	return fallback
+	// Reject Inf / NaN / out-of-range values that would overflow
+	// time.Duration math downstream. Cap at a sane upper bound (1000×).
+	if math.IsNaN(f) || math.IsInf(f, 0) || f < 1 || f > 1000 {
+		return fallback
+	}
+	return f
 }

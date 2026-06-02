@@ -89,9 +89,14 @@ func (c *Client) Poll(ctx context.Context, vendorPath, taskID string) (JobResult
 	if status >= 500 {
 		return JobResult{}, false, fmt.Errorf("upstream HTTP %d", status)
 	}
-	// 4xx (401/403/404/etc.): the task is gone / access lost / never existed.
-	// Even if mulerun returns a JSON body, we surface it as a terminal failure
-	// so callers (sync image waits, async video/music jobs) don't poll forever.
+	// Transient 4xx: rate limit / timeout / momentary auth blip during token
+	// rotation. Treat the same as 5xx so callers retry rather than marking
+	// the job permanently failed.
+	if status == 401 || status == 408 || status == 425 || status == 429 {
+		return JobResult{}, false, fmt.Errorf("upstream HTTP %d (transient)", status)
+	}
+	// Permanent 4xx (403/404/410/etc.): the task is gone / access lost /
+	// never existed. Surface as a terminal failure so the loop stops.
 	if status >= 400 {
 		ve := resp.TaskInfo.Error
 		if ve == nil {
@@ -155,6 +160,11 @@ func (c *Client) SubmitAndWait(ctx context.Context, vendorPath string, body any,
 
 		res, done, err := c.Poll(pollCtx, vendorPath, id)
 		if err != nil {
+			// If the loop's deadline tripped during the GET, surface our
+			// own ErrJobTimeout instead of the raw context error.
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(pollCtx.Err(), context.DeadlineExceeded) {
+				return JobResult{}, ErrJobTimeout
+			}
 			return JobResult{}, err
 		}
 		if done {

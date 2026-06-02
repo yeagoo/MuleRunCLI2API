@@ -279,6 +279,59 @@ func TestVideoRegistry_KlingV3OmniV2VDropsAspect(t *testing.T) {
 	}
 }
 
+func TestVideoRegistry_KlingV3OmniV2VDropsExtraInjections(t *testing.T) {
+	// Review #4 regression: previously `extra: {sound: "on"}` re-added a key
+	// that the mapper had explicitly deleted. mergeExtra now overwrites,
+	// but v2v drops the offending keys AFTER merging so they still vanish.
+	m, _ := Get("kling-v3-omni-video-to-video-edit")
+	got, err := m.MapVideo(VideoInput{
+		Prompt: "x",
+		Video:  "https://x",
+		Extra: map[string]any{
+			"sound":         "on",
+			"aspect_ratio":  "16:9",
+			"duration":      5,
+			"multi_shot":    "true",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"sound", "aspect_ratio", "duration", "multi_shot"} {
+		if _, has := got[k]; has {
+			t.Fatalf("v2v must drop %q even when supplied via extra, got %+v", k, got)
+		}
+	}
+}
+
+func TestMergeExtra_OverridesMapperValue(t *testing.T) {
+	// Review #4: mergeExtra now overwrites, so `extra: {key: "override"}`
+	// wins over a mapper-computed value — that's the explicit escape
+	// hatch for typed fields the registry doesn't model.
+	m, _ := Get("speech-2.8-hd")
+	got, err := m.MapAudio(AudioInput{
+		Input: "hi",
+		Voice: "Default",
+		Extra: map[string]any{
+			"voice_setting":  map[string]any{"voice_id": "Override", "speed": 2.0},
+			"output_format":  "hex",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vs, ok := got["voice_setting"].(map[string]any)
+	if !ok {
+		t.Fatalf("voice_setting type: %T", got["voice_setting"])
+	}
+	if vs["voice_id"] != "Override" {
+		t.Fatalf("expected extra.voice_setting to override mapper, got %+v", vs)
+	}
+	if got["output_format"] != "hex" {
+		t.Fatalf("expected extra.output_format to override 'url', got %v", got["output_format"])
+	}
+}
+
 func TestVideoRegistry_HappyHorseI2V(t *testing.T) {
 	m, ok := Get("happy-horse-1-0-i2v")
 	if !ok {

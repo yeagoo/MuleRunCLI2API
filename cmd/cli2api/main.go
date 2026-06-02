@@ -119,9 +119,18 @@ func redactDSN(dsn string) string {
 		u.User = url.User("***")
 	}
 	q := u.Query()
-	for _, key := range []string{"authToken", "auth_token", "jwt", "password"} {
-		if q.Has(key) {
-			q.Set(key, "***")
+	// Match secret-bearing query keys case-insensitively. Turso/libsql
+	// dashboards commonly emit ?AuthToken=... (PascalCase); a strict
+	// lowercase match would leak the token to logs.
+	secrets := map[string]struct{}{
+		"authtoken":  {},
+		"auth_token": {},
+		"jwt":        {},
+		"password":   {},
+	}
+	for k := range q {
+		if _, hit := secrets[strings.ToLower(k)]; hit {
+			q.Set(k, "***")
 		}
 	}
 	u.RawQuery = q.Encode()

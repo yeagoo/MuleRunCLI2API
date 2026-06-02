@@ -50,6 +50,38 @@ func TestReaper_DisabledWhenIntervalZero(t *testing.T) {
 	StartReaper(ctx, s, 0, time.Hour, 3.0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
+func TestReaper_RetentionZeroSparesInFlightLegacy(t *testing.T) {
+	// Codex round-3 P2.1 follow-up: setting retention=0 must NOT wipe
+	// pre-existing rows. Earlier a 0 retention computed hardCutoff=now,
+	// matching every legacy row and reaping in-flight jobs.
+	s := NewMemory()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Two legacy rows from a prior config (retention was non-zero then).
+	for _, j := range []*Job{
+		{LocalID: "old-completed", Kind: KindVideo, Model: "x", VendorPath: "p", VendorTaskID: "vt-1", CreatedAt: 1, ExpiresAt: 2, Status: "completed"},
+		{LocalID: "old-inflight", Kind: KindVideo, Model: "x", VendorPath: "p", VendorTaskID: "vt-2", CreatedAt: 1, ExpiresAt: 2, Status: "queued"},
+	} {
+		if err := s.Put(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// retention=0 ⇒ "never expire". Reaper still ticks, but must NOT delete.
+	StartReaper(ctx, s, 20*time.Millisecond, 0, 3.0, log)
+
+	time.Sleep(150 * time.Millisecond) // ~5+ ticks
+
+	if g, _ := s.Get(ctx, "old-completed"); g == nil {
+		t.Fatal("retention=0 must NOT reap legacy completed row")
+	}
+	if g, _ := s.Get(ctx, "old-inflight"); g == nil {
+		t.Fatal("retention=0 must NOT reap legacy in-flight row")
+	}
+}
+
 func TestReaper_HardCapDeletesAbandonedInFlight(t *testing.T) {
 	// Simulate the case Codex P2.1 flagged: a client submits a job and
 	// then never polls. Local status stays "queued" forever, so the

@@ -126,7 +126,7 @@ def resolve_mulerun_token() -> str | None:
       1. MULERUN_TOKEN env var
       2. ~/.config/mulerun/oauth_cache.json (mulerun-cli >=0.1.0)
       3. ~/.mulerun/{auth,credentials,token}.json (older versions)
-    Returns None if nothing is found.
+    Returns None if nothing is found OR if the cached token has expired.
     """
     if t := os.environ.get("MULERUN_TOKEN", "").strip():
         return t
@@ -138,12 +138,17 @@ def resolve_mulerun_token() -> str | None:
         (home / ".mulerun" / "credentials.json", ["token", "access_token", "accessToken"]),
         (home / ".mulerun" / "token.json", ["token", "access_token", "accessToken"]),
     ]
+    now = int(time.time())
     for path, keys in candidates:
         if not path.exists():
             continue
         try:
             data = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
+            continue
+        # Honor expires_at if present (matches cli2api's own check).
+        exp = data.get("expires_at")
+        if isinstance(exp, (int, float)) and exp > 0 and now >= exp:
             continue
         for k in keys:
             v = data.get(k)
@@ -201,19 +206,22 @@ def cli2api_server(*, env_overrides: dict[str, str], log_path: Path, keep: bool 
             raise SystemExit("server did not become healthy within 5 s")
         yield base_url, port
     finally:
+        # NOTE: do NOT `return` from a finally — that swallows in-flight
+        # exceptions including KeyboardInterrupt. Branching is fine because
+        # both paths fall through to the function end without `return`.
         if keep:
             print(f"\n[--keep-server] cli2api is still running at {base_url}  (pid {proc.pid})")
             print(f"               logs: {log_path}")
             print(f"               kill with: kill {proc.pid}")
             log_file.close()
-            return
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        log_file.close()
+        else:
+            proc.send_signal(signal.SIGTERM)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            log_file.close()
 
 
 # ---------------------------------------------------------------- cold tests

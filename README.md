@@ -235,7 +235,13 @@ CLI2API_JOBSTORE_DSN=file:/var/lib/cli2api/jobs.db ./bin/cli2api
 CLI2API_JOBSTORE_DSN="libsql://your-db.turso.io?authToken=$TURSO_TOKEN" ./bin/cli2api
 ```
 
-reaper 后台 goroutine 每 `CLI2API_REAPER_INTERVAL`（默认 1h）扫一次，删掉超过 `CLI2API_JOB_RETENTION`（默认 7d）的旧 job。任一设 `0s` 禁用清理。
+reaper 后台 goroutine 每 `CLI2API_REAPER_INTERVAL`（默认 1h）扫一次，删掉超过 `CLI2API_JOB_RETENTION`（默认 7d）的旧 job。
+
+**保留期细节**（避免在跑的 job 被误删）：
+- 终态 job（`completed` / `failed`）：`expires_at` 一过就删
+- in-flight job（`queued` / `in_progress`）：保留到 `expires_at + retention × CLI2API_JOB_HARD_CAP_MULT`（默认 3）才强删——给客户端足够时间继续轮询
+- `CLI2API_JOB_RETENTION=0` 整体禁用 sweep，**任何 job 都不会被自动删**
+- `CLI2API_REAPER_INTERVAL=0` 也直接禁用 reaper 协程
 
 > 启动日志里 DSN 的鉴权部分会自动脱敏，可以放心写入容器日志。
 
@@ -261,13 +267,14 @@ location /v1/ {
 | `CLI2API_PORT` | `8080` | HTTP 监听端口 |
 | `CLI2API_API_KEYS` | *(空)* | 入站 API key 白名单（逗号分隔）；空 = 不鉴权 |
 | `CLI2API_JOBSTORE_DSN` | *(空 = 内存)* | libsql DSN（`file:...` / `libsql://...?authToken=...`） |
-| `CLI2API_JOB_RETENTION` | `168h` | job 行保留时长；`0s` = 不过期 |
+| `CLI2API_JOB_RETENTION` | `168h` | job 行保留时长；`0s` = 不过期（reaper 整体跳过 sweep） |
 | `CLI2API_REAPER_INTERVAL` | `1h` | reaper 扫描周期；`0s` = 禁用 |
+| `CLI2API_JOB_HARD_CAP_MULT` | `3.0` | in-flight job 的硬上限倍数。`expires_at + retention × N` 之后无论状态如何强删，避免被遗弃的 job 无限增长。范围 1.0–1000.0 |
 | `CLI2API_IMAGE_TIMEOUT` | `5m` | 同步图像/语音最长等待 |
 | `CLI2API_POLL_INTERVAL` | `2s` | 上游轮询初始周期 |
 | `CLI2API_POLL_MAX_INTERVAL` | `10s` | 轮询退避上限 |
 | `CLI2API_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `MULERUN_TOKEN` | *(读 `~/.mulerun/`)* | 上游 mulerun token |
+| `MULERUN_TOKEN` | *(读 `~/.config/mulerun/oauth_cache.json` 或 `~/.mulerun/`)* | 上游 mulerun token；不设时按顺序读 OAuth cache（mulerun-cli ≥0.1.0）和 legacy 路径 |
 | `MULERUN_API_BASE_URL` | `https://api.mulerun.com` | 上游 base URL |
 
 完整模板见 `.env.example`。

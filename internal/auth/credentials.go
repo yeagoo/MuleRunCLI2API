@@ -2,11 +2,11 @@ package auth
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // DiscoverToken returns a mulerun token plus a human-readable source string.
@@ -42,10 +42,11 @@ func DiscoverToken() (token string, source string, err error) {
 	for _, path := range candidates {
 		t, perr := readTokenFile(path)
 		if perr != nil {
-			if errors.Is(perr, os.ErrNotExist) {
-				continue
-			}
-			return "", "", fmt.Errorf("read %s: %w", path, perr)
+			// Any read error (ENOENT, permission-denied, malformed JSON,
+			// etc.) is a "this file isn't usable, try the next one" signal.
+			// Hard-erroring here would leave the user stuck if e.g. one
+			// path is owned by root from an earlier sudo invocation.
+			continue
 		}
 		if t != "" {
 			return t, "file:" + path, nil
@@ -63,6 +64,14 @@ func readTokenFile(path string) (string, error) {
 	var generic map[string]any
 	if err := json.Unmarshal(data, &generic); err != nil {
 		return "", fmt.Errorf("parse json: %w", err)
+	}
+	// If the file carries an `expires_at` (unix seconds, mulerun-cli format)
+	// and it's already past, treat the token as missing — using it just
+	// produces 401s that look like cli2api bugs.
+	if exp, ok := generic["expires_at"]; ok {
+		if expSec, ok := exp.(float64); ok && expSec > 0 && time.Now().Unix() >= int64(expSec) {
+			return "", nil
+		}
 	}
 	for _, key := range []string{"token", "access_token", "accessToken"} {
 		if v, ok := generic[key]; ok {

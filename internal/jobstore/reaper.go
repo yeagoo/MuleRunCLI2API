@@ -41,6 +41,12 @@ func StartReaper(ctx context.Context, store Store, interval, retention time.Dura
 				log.Info("reaper stopped")
 				return
 			case now := <-t.C:
+				// retention<=0 means "never expire" — skip the sweep entirely
+				// rather than risk reaping pre-existing rows that carry a
+				// non-zero expires_at from an earlier config.
+				if retention <= 0 {
+					continue
+				}
 				hardCutoff := now.Add(-hardLag).Unix()
 				sweep(ctx, store, now.Unix(), hardCutoff, log)
 			}

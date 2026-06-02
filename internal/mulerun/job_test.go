@@ -118,9 +118,9 @@ func TestSubmitAndWait_Timeout(t *testing.T) {
 }
 
 func TestPoll_4xxIsTerminal(t *testing.T) {
-	// Mulerun returning 401 / 403 / 404 on a poll means the task is gone or
-	// inaccessible; the loop must stop, not wait forever.
-	for _, status := range []int{401, 403, 404} {
+	// Permanent 4xx (403/404/410) means the task is gone or never existed;
+	// stop the loop with a terminal failure.
+	for _, status := range []int{403, 404, 410} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(status)
@@ -133,13 +133,35 @@ func TestPoll_4xxIsTerminal(t *testing.T) {
 				t.Fatalf("expected no err, got %v", err)
 			}
 			if !done {
-				t.Fatal("expected done=true on 4xx")
+				t.Fatal("expected done=true on permanent 4xx")
 			}
 			if res.Err == nil || res.Err.Code != status {
 				t.Fatalf("expected VendorError with code=%d, got %+v", status, res.Err)
 			}
 			if res.Status != "failed" {
 				t.Fatalf("expected status=failed, got %q", res.Status)
+			}
+		})
+	}
+}
+
+func TestPoll_TransientStatusesRetry(t *testing.T) {
+	// 401/408/425/429 are transient — ratelimit, request timeout, early
+	// hint, token-rotation blip. The loop must NOT mark the job failed.
+	for _, status := range []int{401, 408, 425, 429} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer srv.Close()
+			c := New(srv.URL, "test-token")
+			_, done, err := c.Poll(context.Background(), "/v1/foo/generation", "task-x")
+			if err == nil {
+				t.Fatal("expected non-nil err so caller retries")
+			}
+			if done {
+				t.Fatal("expected done=false on transient 4xx so caller retries")
 			}
 		})
 	}
@@ -175,7 +197,8 @@ func TestSubmitAndWait_4xxBreaksLoop(t *testing.T) {
 	})
 	mux.HandleFunc("/vendors/test/v1/foo/generation/"+taskID, func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&polls, 1)
-		w.WriteHeader(http.StatusUnauthorized)
+		// 403 is permanent (vs 401 which is now transient)
+		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"detail":"revoked"}`))
 	})
 
@@ -187,8 +210,8 @@ func TestSubmitAndWait_4xxBreaksLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error (vendor failure), got %v", err)
 	}
-	if res.Err == nil || res.Err.Code != 401 {
-		t.Fatalf("expected vendor error 401, got %+v", res.Err)
+	if res.Err == nil || res.Err.Code != 403 {
+		t.Fatalf("expected vendor error 403, got %+v", res.Err)
 	}
 	if got := atomic.LoadInt32(&polls); got > 2 {
 		t.Fatalf("expected at most 2 polls before giving up, got %d", got)

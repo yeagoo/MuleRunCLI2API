@@ -65,18 +65,20 @@ func sanitizeInbound(h http.Header) http.Header {
 }
 
 var dropRequestHeaders = map[string]struct{}{
-	"host":              {},
-	"content-length":    {},
-	"connection":        {},
-	"keep-alive":        {},
-	"proxy-connection":  {},
-	"transfer-encoding": {},
-	"upgrade":           {},
-	"te":                {},
-	"trailer":           {},
-	"authorization":     {},
-	"x-api-key":         {},
-	"api-key":           {},
+	"host":                {},
+	"content-length":      {},
+	"connection":          {},
+	"keep-alive":          {},
+	"proxy-connection":    {},
+	"proxy-authorization": {}, // hop-by-hop per RFC 7235 §4.4
+	"transfer-encoding":   {},
+	"upgrade":             {},
+	"te":                  {},
+	"trailer":             {},
+	"authorization":       {}, // we inject our own
+	"x-api-key":           {}, // we inject our own
+	"api-key":             {},
+	"cookie":              {}, // not needed by mulerun; avoid leaking session state
 }
 
 var dropResponseHeaders = map[string]struct{}{
@@ -89,6 +91,7 @@ var dropResponseHeaders = map[string]struct{}{
 	"transfer-encoding":   {},
 	"upgrade":             {},
 	"content-length":      {},
+	"set-cookie":          {}, // mulerun shouldn't set them; avoid pass-through
 }
 
 func shouldDropRequestHeader(name string) bool {

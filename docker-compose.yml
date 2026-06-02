@@ -12,6 +12,9 @@ services:
       CLI2API_LOG_LEVEL: "info"
       MULERUN_API_BASE_URL: "https://api.mulerun.com"
     # Option B — mount the OAuth cache created by `mulerun login`
+    # mulerun-cli >=0.1.0 writes to ~/.config/mulerun/oauth_cache.json;
+    # older versions to ~/.mulerun/. Mount whichever you have (or both).
     # volumes:
+    #   - ${HOME}/.config/mulerun:/home/nonroot/.config/mulerun:ro
     #   - ${HOME}/.mulerun:/home/nonroot/.mulerun:ro
     restart: unless-stopped

@@ -9,6 +9,22 @@ func IsMusic(modelID string) bool {
 	return len(modelID) >= 5 && modelID[:5] == "music"
 }
 
+// buildAudioSetting builds the upstream `audio_setting` sub-object shared by
+// speech and music. Returns nil when no fields are set so callers can omit
+// the key entirely.
+func buildAudioSetting(in AudioInput) map[string]any {
+	out := map[string]any{}
+	if f := firstNonEmpty(in.AudioFormat, in.ResponseFormat); f != "" {
+		out["format"] = f
+	}
+	putNonNilInt(out, "sample_rate", in.SampleRate)
+	putNonNilInt(out, "bitrate", in.Bitrate)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func init() {
 	// ---- MiniMax text-to-speech -----------------------------------------
 	//
@@ -39,13 +55,8 @@ func init() {
 			out["voice_setting"] = voiceSetting
 		}
 
-		audioSetting := map[string]any{}
-		if f := firstNonEmpty(in.AudioFormat, in.ResponseFormat); f != "" {
-			audioSetting["format"] = f
-		}
-		putNonNilInt(audioSetting, "sample_rate", in.SampleRate)
-		putNonNilInt(audioSetting, "bitrate", in.Bitrate)
-		if len(audioSetting) > 0 {
+		audioSetting := buildAudioSetting(in)
+		if audioSetting != nil {
 			out["audio_setting"] = audioSetting
 		}
 
@@ -74,13 +85,8 @@ func init() {
 		putNonEmpty(out, "lyrics_prompt", in.LyricsPrompt)
 		putNonNilBool(out, "lyrics_optimizer", in.LyricsOptimizer)
 
-		audioSetting := map[string]any{}
-		if f := firstNonEmpty(in.AudioFormat, in.ResponseFormat); f != "" {
-			audioSetting["format"] = f
-		}
-		putNonNilInt(audioSetting, "sample_rate", in.SampleRate)
-		putNonNilInt(audioSetting, "bitrate", in.Bitrate)
-		if len(audioSetting) > 0 {
+		audioSetting := buildAudioSetting(in)
+		if audioSetting != nil {
 			out["audio_setting"] = audioSetting
 		}
 

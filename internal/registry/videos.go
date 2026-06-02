@@ -287,14 +287,15 @@ func init() {
 		putNonNilBool(out, "keep_audio", in.KeepAudio)
 		putNonEmptySlice(out, "images", in.Images)
 		putNonEmptySlice(out, "elements", in.Elements)
-		// v2v/edit does not support aspect_ratio/duration/multi_shot — drop them.
+		mergeExtra(out, in.Extra)
+		// Drop v2v-unsupported keys AFTER mergeExtra so a client that
+		// sneaks them in via `extra` still doesn't reach the upstream.
 		delete(out, "aspect_ratio")
 		delete(out, "duration")
 		delete(out, "multi_shot")
 		delete(out, "shot_type")
 		delete(out, "multi_prompt")
 		delete(out, "sound")
-		mergeExtra(out, in.Extra)
 		return out, nil
 	}
 	register(Model{ID: "kling-v3-omni-text-to-video", Vendor: "klingai", Kind: KindVideo,
