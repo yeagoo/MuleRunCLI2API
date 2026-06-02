@@ -31,5 +31,5 @@ docker:
 docker-run:
 	docker run --rm -p 8080:8080 \
 		-e MULERUN_TOKEN=$$MULERUN_TOKEN \
-		-v $$HOME/.mulerun:/root/.mulerun:ro \
+		-v $$HOME/.mulerun:/home/nonroot/.mulerun:ro \
 		cli2api:dev

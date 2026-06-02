@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -91,7 +92,36 @@ func openJobStore(dsn string) (jobstore.Store, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	return s, "libsql:" + dsn, nil
+	return s, "libsql:" + redactDSN(dsn), nil
+}
+
+// redactDSN strips secrets from a libsql/HTTP DSN so it's safe to log.
+// Drops the userinfo and replaces any sensitive query params (authToken,
+// auth_token, jwt, password) with "***". File paths and bare paths pass
+// through unchanged.
+func redactDSN(dsn string) string {
+	if strings.HasPrefix(dsn, "file:") || !strings.Contains(dsn, "://") {
+		return dsn
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		// Unparseable — refuse to guess; show only the scheme.
+		if i := strings.Index(dsn, "://"); i > 0 {
+			return dsn[:i+3] + "***"
+		}
+		return "***"
+	}
+	if u.User != nil {
+		u.User = url.UserPassword(u.User.Username(), "***")
+	}
+	q := u.Query()
+	for _, key := range []string{"authToken", "auth_token", "jwt", "password"} {
+		if q.Has(key) {
+			q.Set(key, "***")
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func newLogger(level string) *slog.Logger {

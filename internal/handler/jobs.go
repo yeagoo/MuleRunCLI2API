@@ -28,6 +28,19 @@ type asyncJobAPI struct {
 	extra       func(registry.Model) bool
 }
 
+// hasMapper returns true if the model has a non-nil mapper for this surface.
+// Prevents nil-pointer panics from cross-surface misregistration.
+func (h asyncJobAPI) hasMapper(m registry.Model) bool {
+	switch h.expectKind {
+	case registry.KindVideo:
+		return m.MapVideo != nil
+	case registry.KindAudio:
+		return m.MapAudio != nil
+	default:
+		return false
+	}
+}
+
 func newLocalID(prefix string) string {
 	var b [10]byte
 	_, _ = rand.Read(b[:])
@@ -55,7 +68,7 @@ func (h asyncJobAPI) submit(
 			return
 		}
 		m, ok := registry.Get(modelID)
-		if !ok || m.Kind != h.expectKind || (h.extra != nil && !h.extra(m)) {
+		if !ok || m.Kind != h.expectKind || (h.extra != nil && !h.extra(m)) || !h.hasMapper(m) {
 			apierr.Write(w, apierr.StyleOpenAI, http.StatusNotFound, "unknown "+string(h.kind)+" model: "+modelID, "model_not_found")
 			return
 		}

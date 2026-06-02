@@ -85,8 +85,19 @@ func (c *Client) Poll(ctx context.Context, vendorPath, taskID string) (JobResult
 	if err != nil {
 		return JobResult{}, false, err
 	}
+	// 5xx: transient — let the caller retry on the next tick.
 	if status >= 500 {
 		return JobResult{}, false, fmt.Errorf("upstream HTTP %d", status)
+	}
+	// 4xx (401/403/404/etc.): the task is gone / access lost / never existed.
+	// Even if mulerun returns a JSON body, we surface it as a terminal failure
+	// so callers (sync image waits, async video/music jobs) don't poll forever.
+	if status >= 400 {
+		ve := resp.TaskInfo.Error
+		if ve == nil {
+			ve = &VendorError{Code: status, Title: fmt.Sprintf("HTTP %d", status), Detail: "task is no longer available"}
+		}
+		return JobResult{Status: "failed", Err: ve}, true, nil
 	}
 
 	r := JobResult{
@@ -105,6 +116,13 @@ func (c *Client) Poll(ctx context.Context, vendorPath, taskID string) (JobResult
 			r.Err = &VendorError{Code: status, Title: "failed", Detail: "task failed without diagnostic"}
 		}
 		return r, true, nil
+	case "":
+		// 2xx with empty status string means the upstream contract was
+		// broken; treat as terminal failure rather than poll forever.
+		return JobResult{
+			Status: "failed",
+			Err:    &VendorError{Code: status, Title: "empty status", Detail: "upstream returned 2xx with no status field"},
+		}, true, nil
 	default:
 		// pending | queued | running | processing | (unknown) — keep polling.
 		return r, false, nil

@@ -35,7 +35,7 @@ func Images(d Deps) http.HandlerFunc {
 			return
 		}
 		m, ok := registry.Get(in.Model)
-		if !ok || m.Kind != registry.KindImage {
+		if !ok || m.Kind != registry.KindImage || m.MapImage == nil {
 			apierr.Write(w, apierr.StyleOpenAI, http.StatusNotFound, "unknown image model: "+in.Model, "model_not_found")
 			return
 		}

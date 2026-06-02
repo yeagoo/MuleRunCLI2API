@@ -206,3 +206,18 @@ func TestEdits_UnknownModel(t *testing.T) {
 		t.Fatalf("status: %d", rr.Code)
 	}
 }
+
+// TestImages_RejectsEditOnlyModel guards Codex finding P2: calling
+// /v1/images/generations with an edit-only model used to panic because
+// `gpt-image-2-edit` has Kind=Image but no MapImage.
+func TestImages_RejectsEditOnlyModel(t *testing.T) {
+	d := Deps{Client: mulerun.New("http://unused", "tok")}
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations",
+		strings.NewReader(`{"model":"gpt-image-2-edit","prompt":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	Images(d)(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}

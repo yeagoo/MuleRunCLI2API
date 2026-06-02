@@ -116,3 +116,81 @@ func TestSubmitAndWait_Timeout(t *testing.T) {
 		t.Fatalf("expected ErrJobTimeout, got %v", err)
 	}
 }
+
+func TestPoll_4xxIsTerminal(t *testing.T) {
+	// Mulerun returning 401 / 403 / 404 on a poll means the task is gone or
+	// inaccessible; the loop must stop, not wait forever.
+	for _, status := range []int{401, 403, 404} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
+			}))
+			defer srv.Close()
+			c := New(srv.URL, "test-token")
+			res, done, err := c.Poll(context.Background(), "/v1/foo/generation", "task-x")
+			if err != nil {
+				t.Fatalf("expected no err, got %v", err)
+			}
+			if !done {
+				t.Fatal("expected done=true on 4xx")
+			}
+			if res.Err == nil || res.Err.Code != status {
+				t.Fatalf("expected VendorError with code=%d, got %+v", status, res.Err)
+			}
+			if res.Status != "failed" {
+				t.Fatalf("expected status=failed, got %q", res.Status)
+			}
+		})
+	}
+}
+
+func TestPoll_EmptyStatusIsTerminal(t *testing.T) {
+	// 2xx with no status field is a contract violation — fail instead of
+	// polling forever.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"task_info":{"id":"x","created_at":"x","updated_at":"x"}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "test-token")
+	res, done, err := c.Poll(context.Background(), "/v1/foo/generation", "task-x")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !done || res.Status != "failed" || res.Err == nil {
+		t.Fatalf("expected terminal failure, got done=%v status=%q err=%+v", done, res.Status, res.Err)
+	}
+}
+
+func TestSubmitAndWait_4xxBreaksLoop(t *testing.T) {
+	const taskID = "task-gone"
+	var polls int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/vendors/test/v1/foo/generation", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"task_info": map[string]any{"id": taskID, "status": "pending", "created_at": "x", "updated_at": "x"},
+		})
+	})
+	mux.HandleFunc("/vendors/test/v1/foo/generation/"+taskID, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&polls, 1)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"detail":"revoked"}`))
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(srv.URL, "test-token")
+	res, err := c.SubmitAndWait(context.Background(), "/vendors/test/v1/foo/generation", map[string]string{"prompt": "x"}, 2*time.Second, 5*time.Millisecond, 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("expected no error (vendor failure), got %v", err)
+	}
+	if res.Err == nil || res.Err.Code != 401 {
+		t.Fatalf("expected vendor error 401, got %+v", res.Err)
+	}
+	if got := atomic.LoadInt32(&polls); got > 2 {
+		t.Fatalf("expected at most 2 polls before giving up, got %d", got)
+	}
+}
