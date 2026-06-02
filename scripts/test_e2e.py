@@ -117,6 +117,41 @@ class Runner:
 # ---------------------------------------------------------------- server boot
 
 
+def resolve_mulerun_token() -> str | None:
+    """Match cli2api's own credential-discovery order so the test script's
+    studio-token detection works whether the user exported MULERUN_TOKEN or
+    relied on the OAuth cache from `mulerun login`.
+
+    Order:
+      1. MULERUN_TOKEN env var
+      2. ~/.config/mulerun/oauth_cache.json (mulerun-cli >=0.1.0)
+      3. ~/.mulerun/{auth,credentials,token}.json (older versions)
+    Returns None if nothing is found.
+    """
+    if t := os.environ.get("MULERUN_TOKEN", "").strip():
+        return t
+
+    home = Path.home()
+    candidates: list[tuple[Path, list[str]]] = [
+        (home / ".config" / "mulerun" / "oauth_cache.json", ["access_token", "token", "accessToken"]),
+        (home / ".mulerun" / "auth.json", ["token", "access_token", "accessToken"]),
+        (home / ".mulerun" / "credentials.json", ["token", "access_token", "accessToken"]),
+        (home / ".mulerun" / "token.json", ["token", "access_token", "accessToken"]),
+    ]
+    for path, keys in candidates:
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        for k in keys:
+            v = data.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    return None
+
+
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -634,13 +669,12 @@ def main() -> int:
     # For cold-smoke only, the server still needs A token to start (it can't
     # know we won't call upstream). Inject a dummy if the user hasn't set one
     # AND there's no ~/.mulerun/ cache. --live always requires a real token.
+    discovered_token = resolve_mulerun_token()
     if not os.environ.get("MULERUN_TOKEN"):
-        home_dir = Path.home() / ".mulerun"
-        has_oauth_cache = any((home_dir / f).exists() for f in ("auth.json", "credentials.json", "token.json"))
-        if args.live and not has_oauth_cache:
+        if args.live and not discovered_token:
             print("ERROR: --live requires MULERUN_TOKEN or `mulerun login` to have been run", file=sys.stderr)
             return 2
-        if not has_oauth_cache:
+        if not discovered_token:
             env_overrides["MULERUN_TOKEN"] = "cold-smoke-dummy-token-not-for-upstream-calls"
 
     runner = Runner()
@@ -653,7 +687,7 @@ def main() -> int:
                     runner, base,
                     skip_video=args.skip_video,
                     skip_music=args.skip_music,
-                    mulerun_token=os.environ.get("MULERUN_TOKEN"),
+                    mulerun_token=resolve_mulerun_token(),
                 )
     except SystemExit as e:
         print(f"\n[setup] {e}", file=sys.stderr)

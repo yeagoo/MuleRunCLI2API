@@ -37,7 +37,15 @@ type Job struct {
 type Store interface {
 	Put(ctx context.Context, j *Job) error
 	Get(ctx context.Context, id string) (*Job, error)
-	DeleteExpired(ctx context.Context, now int64) (int64, error)
+	// DeleteExpired removes:
+	//   - terminal (completed/failed) jobs whose expires_at <= now;
+	//   - any job (regardless of status) whose expires_at <= hardCutoff.
+	// Pass hardCutoff <= 0 to disable the hard-cap predicate (test helper).
+	// In production the reaper subtracts retention*multiplier from now to
+	// derive a hardCutoff in the past — that's the safety net for
+	// in-flight jobs whose owner never polls again, since local status
+	// only updates on poll.
+	DeleteExpired(ctx context.Context, now, hardCutoff int64) (int64, error)
 	Close() error
 }
 
@@ -74,16 +82,20 @@ func (m *Memory) Get(_ context.Context, id string) (*Job, error) {
 	return &j, nil
 }
 
-// DeleteExpired removes terminal jobs (completed / failed) whose ExpiresAt
-// is non-zero and <= now. In-flight jobs are preserved even if expired so
-// callers can still poll a long-running task.
-func (m *Memory) DeleteExpired(_ context.Context, now int64) (int64, error) {
+// DeleteExpired removes terminal jobs whose ExpiresAt <= now, and any job
+// (including in-flight) whose ExpiresAt <= hardCutoff. hardCutoff <= 0
+// disables the hard-cap predicate.
+func (m *Memory) DeleteExpired(_ context.Context, now, hardCutoff int64) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var n int64
 	for id, j := range m.jobs {
-		if j.ExpiresAt > 0 && j.ExpiresAt <= now &&
-			(j.Status == "completed" || j.Status == "failed") {
+		if j.ExpiresAt <= 0 {
+			continue
+		}
+		terminal := j.Status == "completed" || j.Status == "failed"
+		hardHit := hardCutoff > 0 && j.ExpiresAt <= hardCutoff
+		if (terminal && j.ExpiresAt <= now) || hardHit {
 			delete(m.jobs, id)
 			n++
 		}

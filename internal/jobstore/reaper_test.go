@@ -23,7 +23,9 @@ func TestReaper_DeletesExpiredOverTime(t *testing.T) {
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	StartReaper(ctx, s, 20*time.Millisecond, log)
+	// retention=1h means hard-cap is far in the future; only terminal+expired
+	// gets deleted in this test.
+	StartReaper(ctx, s, 20*time.Millisecond, time.Hour, 3.0, log)
 
 	// Wait long enough for at least 2 sweeps.
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -45,5 +47,34 @@ func TestReaper_DisabledWhenIntervalZero(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// Should return immediately without spawning a goroutine.
-	StartReaper(ctx, s, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	StartReaper(ctx, s, 0, time.Hour, 3.0, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+func TestReaper_HardCapDeletesAbandonedInFlight(t *testing.T) {
+	// Simulate the case Codex P2.1 flagged: a client submits a job and
+	// then never polls. Local status stays "queued" forever, so the
+	// "terminal+expired" predicate alone never fires. The hard-cap
+	// predicate must still reap it.
+	s := NewMemory()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// expires_at=2: any sweep at unix>=2 with the soft predicate would skip
+	// it (status=queued), but a hard cutoff >= 2 should reap.
+	if err := s.Put(ctx, &Job{LocalID: "abandoned", Kind: KindVideo, Model: "x", VendorPath: "p", VendorTaskID: "vt-z", CreatedAt: 1, ExpiresAt: 2, Status: "queued"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// retention=1ms, multiplier=1 → hard cutoff = now - 1ms; well past 2.
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	StartReaper(ctx, s, 20*time.Millisecond, time.Millisecond, 1.0, log)
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if got, _ := s.Get(ctx, "abandoned"); got == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("hard-cap reaper did not delete abandoned in-flight job")
 }

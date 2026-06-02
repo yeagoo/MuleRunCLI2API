@@ -37,7 +37,7 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	jobstore.StartReaper(ctx, store, cfg.ReaperInterval, log)
+	jobstore.StartReaper(ctx, store, cfg.ReaperInterval, cfg.JobRetention, cfg.JobHardCapMult, log)
 
 	log.Info("startup",
 		"addr", ":"+cfg.Port,
@@ -50,6 +50,7 @@ func main() {
 		"jobstore", storeDesc,
 		"job_retention", cfg.JobRetention.String(),
 		"reaper_interval", cfg.ReaperInterval.String(),
+		"job_hard_cap_mult", cfg.JobHardCapMult,
 	)
 
 	srv := &http.Server{

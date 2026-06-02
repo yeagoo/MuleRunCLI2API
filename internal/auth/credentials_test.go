@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -59,6 +60,70 @@ func TestDiscoverToken_None(t *testing.T) {
 	}
 	if tok != "" {
 		t.Fatalf("expected empty, got %q", tok)
+	}
+}
+
+func TestDiscoverToken_FromOAuthCache(t *testing.T) {
+	// mulerun-cli 0.1.0+ writes here. Must be discovered before older paths.
+	home := t.TempDir()
+	t.Setenv("MULERUN_TOKEN", "")
+	t.Setenv("HOME", home)
+
+	dir := filepath.Join(home, ".config", "mulerun")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"access_token":  "from-oauth-cache",
+		"refresh_token": "ignored",
+		"expires_at":    1780410965,
+	})
+	if err := os.WriteFile(filepath.Join(dir, "oauth_cache.json"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tok, src, err := DiscoverToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok != "from-oauth-cache" {
+		t.Fatalf("want from-oauth-cache, got %q", tok)
+	}
+	if !strings.Contains(src, "oauth_cache.json") {
+		t.Fatalf("unexpected source: %s", src)
+	}
+}
+
+func TestDiscoverToken_OAuthCachePreferredOverLegacy(t *testing.T) {
+	// When both new and old caches exist, the new path wins.
+	home := t.TempDir()
+	t.Setenv("MULERUN_TOKEN", "")
+	t.Setenv("HOME", home)
+
+	newDir := filepath.Join(home, ".config", "mulerun")
+	if err := os.MkdirAll(newDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(newDir, "oauth_cache.json"),
+		[]byte(`{"access_token":"new-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldDir := filepath.Join(home, ".mulerun")
+	if err := os.MkdirAll(oldDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "auth.json"),
+		[]byte(`{"token":"old-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tok, _, err := DiscoverToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok != "new-token" {
+		t.Fatalf("expected new path to win, got %q", tok)
 	}
 }
 

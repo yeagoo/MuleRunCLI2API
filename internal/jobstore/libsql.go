@@ -147,14 +147,14 @@ FROM jobs WHERE local_id = ?`, id)
 	return &j, nil
 }
 
-func (s *LibSQL) DeleteExpired(ctx context.Context, now int64) (int64, error) {
-	// Only sweep terminal jobs. An in-flight job (queued / in_progress) might
-	// still get a real status update from upstream — deleting it mid-flight
-	// would 404 the client even though the work is still happening.
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM jobs WHERE expires_at > 0 AND expires_at <= ? AND status IN ('completed', 'failed')`,
-		now,
-	)
+func (s *LibSQL) DeleteExpired(ctx context.Context, now, hardCutoff int64) (int64, error) {
+	// hardCutoff <= 0 disables the hard-cap branch entirely so callers can
+	// run a "soft" sweep without affecting in-flight jobs.
+	res, err := s.db.ExecContext(ctx, `
+DELETE FROM jobs WHERE expires_at > 0 AND (
+  (expires_at <= ? AND status IN ('completed', 'failed'))
+  OR (? > 0 AND expires_at <= ?)
+)`, now, hardCutoff, hardCutoff)
 	if err != nil {
 		return 0, err
 	}

@@ -118,7 +118,8 @@ func runExpireSuite(t *testing.T, s Store) {
 		}
 	}
 
-	n, err := s.DeleteExpired(ctx, 100)
+	// Pass hardCutoff=0 to test only the soft predicate (terminal expired).
+	n, err := s.DeleteExpired(ctx, 100, 0)
 	if err != nil {
 		t.Fatalf("delete expired: %v", err)
 	}
@@ -133,13 +134,29 @@ func runExpireSuite(t *testing.T, s Store) {
 		t.Fatal("expired+failed job should have been deleted")
 	}
 	if g, _ := s.Get(ctx, "expired-inflight"); g == nil {
-		t.Fatal("expired but in-flight (queued) job MUST NOT be deleted")
+		t.Fatal("expired but in-flight (queued) job MUST NOT be deleted by soft cutoff")
 	}
 	if g, _ := s.Get(ctx, "fresh"); g == nil {
 		t.Fatal("fresh job missing")
 	}
 	if g, _ := s.Get(ctx, "forever"); g == nil {
 		t.Fatal("forever job missing")
+	}
+
+	// Now apply a hard cutoff that crosses the in-flight job's expires_at.
+	// It MUST be reaped — clients that abandoned polling shouldn't leak forever.
+	n, err = s.DeleteExpired(ctx, 100, 200)
+	if err != nil {
+		t.Fatalf("delete with hard cutoff: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 deletion (in-flight via hard cutoff), got %d", n)
+	}
+	if g, _ := s.Get(ctx, "expired-inflight"); g != nil {
+		t.Fatal("hard cutoff should have reaped in-flight job")
+	}
+	if g, _ := s.Get(ctx, "fresh"); g == nil {
+		t.Fatal("fresh job (expires_at=1000) must survive hard cutoff at 200")
 	}
 }
 

@@ -20,9 +20,10 @@ type Config struct {
 	PollInterval    time.Duration
 	PollMaxInterval time.Duration
 	LogLevel        string
-	JobStoreDSN     string // empty = in-memory; otherwise a libsql DSN or file path
+	JobStoreDSN     string  // empty = in-memory; otherwise a libsql DSN or file path
 	JobRetention    time.Duration // 0 = jobs never expire
 	ReaperInterval  time.Duration // 0 = reaper disabled
+	JobHardCapMult  float64       // hard-cap multiplier on retention for in-flight jobs
 
 	TokenSource string
 }
@@ -36,6 +37,7 @@ const (
 	defaultLogLevel        = "info"
 	defaultJobRetention    = 7 * 24 * time.Hour
 	defaultReaperInterval  = time.Hour
+	defaultJobHardCapMult  = 3.0
 )
 
 func Load() (*Config, error) {
@@ -49,6 +51,7 @@ func Load() (*Config, error) {
 		JobStoreDSN:     strings.TrimSpace(os.Getenv("CLI2API_JOBSTORE_DSN")),
 		JobRetention:    durationEnv("CLI2API_JOB_RETENTION", defaultJobRetention),
 		ReaperInterval:  durationEnv("CLI2API_REAPER_INTERVAL", defaultReaperInterval),
+		JobHardCapMult:  floatEnv("CLI2API_JOB_HARD_CAP_MULT", defaultJobHardCapMult),
 	}
 
 	if raw := strings.TrimSpace(os.Getenv("CLI2API_API_KEYS")); raw != "" {
@@ -89,6 +92,17 @@ func durationEnv(key string, fallback time.Duration) time.Duration {
 	}
 	if secs, err := strconv.Atoi(raw); err == nil {
 		return time.Duration(secs) * time.Second
+	}
+	return fallback
+}
+
+func floatEnv(key string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	if f, err := strconv.ParseFloat(raw, 64); err == nil && f >= 1 {
+		return f
 	}
 	return fallback
 }

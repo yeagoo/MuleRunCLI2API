@@ -13,8 +13,16 @@ import (
 //
 // Resolution order:
 //  1. MULERUN_TOKEN env var
-//  2. ~/.mulerun/auth.json | credentials.json | token.json
-//     parsed for a string field named `token`, `access_token`, or `accessToken`.
+//  2. ~/.config/mulerun/oauth_cache.json (mulerun-cli >= 0.1.0)
+//  3. ~/.mulerun/auth.json | credentials.json | token.json (older)
+//
+// In every file we accept any of `token`, `access_token`, `accessToken`.
+//
+// Caveat: the access_token from `mulerun login` is an OAuth/JWT token
+// scoped to the studio plane only. It will NOT authenticate against the
+// chat completions / messages endpoints, which expect a separate
+// "muk-" exchange-key issued by mulerun's API gateway. Set MULERUN_TOKEN
+// to that key for chat surfaces.
 func DiscoverToken() (token string, source string, err error) {
 	if v := strings.TrimSpace(os.Getenv("MULERUN_TOKEN")); v != "" {
 		return v, "env:MULERUN_TOKEN", nil
@@ -24,11 +32,14 @@ func DiscoverToken() (token string, source string, err error) {
 	if herr != nil {
 		return "", "", fmt.Errorf("locate home dir: %w", herr)
 	}
-	dir := filepath.Join(home, ".mulerun")
 
-	candidates := []string{"auth.json", "credentials.json", "token.json"}
-	for _, name := range candidates {
-		path := filepath.Join(dir, name)
+	candidates := []string{
+		filepath.Join(home, ".config", "mulerun", "oauth_cache.json"),
+		filepath.Join(home, ".mulerun", "auth.json"),
+		filepath.Join(home, ".mulerun", "credentials.json"),
+		filepath.Join(home, ".mulerun", "token.json"),
+	}
+	for _, path := range candidates {
 		t, perr := readTokenFile(path)
 		if perr != nil {
 			if errors.Is(perr, os.ErrNotExist) {
