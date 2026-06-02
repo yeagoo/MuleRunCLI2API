@@ -1,0 +1,17 @@
+services:
+  cli2api:
+    build: .
+    image: cli2api:dev
+    ports:
+      - "8080:8080"
+    environment:
+      # Option A — inject the token directly:
+      MULERUN_TOKEN: "${MULERUN_TOKEN}"
+      # Optional: gate the proxy with your own API keys
+      CLI2API_API_KEYS: "${CLI2API_API_KEYS:-}"
+      CLI2API_LOG_LEVEL: "info"
+      MULERUN_API_BASE_URL: "https://api.mulerun.com"
+    # Option B — mount the OAuth cache created by `mulerun login`
+    # volumes:
+    #   - ${HOME}/.mulerun:/home/nonroot/.mulerun:ro
+    restart: unless-stopped
