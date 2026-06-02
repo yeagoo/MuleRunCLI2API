@@ -32,10 +32,13 @@
 
 ```sh
 npm i -g @mulerunai/cli
-mulerun login        # 浏览器 OAuth，token 自动存到 ~/.mulerun/
+mulerun login        # 浏览器 OAuth；token 自动存到 ~/.config/mulerun/
+                     # （mulerun-cli ≥0.1.0；旧版本是 ~/.mulerun/）
 ```
 
 或者直接拿到一个 token 后：`export MULERUN_TOKEN=mr_xxxxxxxxxxxxxxx`。
+
+> **关于 token 平面**：`mulerun login` 拿到的 OAuth token 走 **studio 平面**（图像/视频/音频）。如果你想用 `/v1/chat/completions`、`/v1/messages`、`/v1/responses` 这三个**文本端点**，需要单独的 LLM gateway key（mulerun 控制台另发）—— 这是 mulerun 自己的两套独立认证系统，不是 cli2api 的限制。详见下文「[排错](#排错)」。
 
 ### 2. 构建并启动 cli2api
 
@@ -48,8 +51,12 @@ make build
 启动后你会看到：
 
 ```json
-{"level":"INFO","msg":"startup","addr":":8080","registered_models":61,"jobstore":"memory","auth_required":false}
+{"level":"INFO","msg":"startup","addr":":8080","registered_models":61,
+ "jobstore":"memory","auth_required":false,
+ "token_source":"file:/home/you/.config/mulerun/oauth_cache.json"}
 ```
+
+`token_source` 字段告诉你它从哪儿读到了凭证。如果是 `env:MULERUN_TOKEN` 你设过环境变量；`file:...` 说明它读了 OAuth cache。如果启动失败显示 `no mulerun credentials found` 就跑一次 `mulerun login` 或显式设环境变量。
 
 ### 3. 第一次调用
 
@@ -197,7 +204,11 @@ for chunk in c.chat.completions.create(
 docker compose up --build
 ```
 
-`docker-compose.yml` 里两种凭证注入方式注释好了——`MULERUN_TOKEN` 环境变量，或者挂 `~/.mulerun:/home/nonroot/.mulerun:ro`。任选其一。
+`docker-compose.yml` 里两种凭证注入方式注释好了：
+- **A**：`MULERUN_TOKEN` 环境变量（最简单）
+- **B**：挂 `~/.config/mulerun` + `~/.mulerun` 到容器（用宿主的 OAuth cache）
+
+任选其一。注意：mulerun-cli ≥0.1.0 token 在 `~/.config/mulerun/oauth_cache.json`，旧版本在 `~/.mulerun/`，挂哪一个看你装的版本。
 
 ### 单二进制 + systemd
 
@@ -285,9 +296,21 @@ location /v1/ {
 
 **`no mulerun credentials found`**
 - 跑 `mulerun login`，或者 `export MULERUN_TOKEN=mr_xxx`
+- 启动日志的 `token_source` 字段会告诉你它读到的是哪个文件 / 环境变量
+
+**`/v1/chat/completions` 返回 401 `Invalid API Key format`**
+- mulerun 的 OAuth/Studio token 不能直接调聊天端点（mulerun 自己的两套独立认证）
+- 需要从 mulerun 控制台拿单独的 LLM gateway key，赋给 `MULERUN_TOKEN`
+- 图像/视频/音频端点不受影响——它们用 studio plane 的 token 就行
 
 **`502 upstream HTTP 401`**
 - 上游 token 过期或被拒。重新登录 / 换 token
+- mulerun-cli OAuth cache 默认有 `expires_at` 字段，cli2api 会跳过过期 token 但**最简单还是 `mulerun login` 一遍**
+
+**`vendor_error: code 3005 / 3006 / ...`**
+- 这是 mulerun 上游真实错误（minimax/seedance/wan 等服务自身挂了）
+- cli2api 的工作正常，把上游错误结构化转给客户端
+- 重试或换模型；mulerun 服务恢复后自动好
 
 **`404 unknown image model: dall-e-3`**
 - cli2api **不做** OpenAI 模型名到 mulerun 的别名映射。请用 mulerun 真名（`gpt-image-2` / `wan2.6-t2i` / `midjourney`）
@@ -297,8 +320,12 @@ location /v1/ {
 - 同步包装内部在轮询 mulerun，最长等 `CLI2API_IMAGE_TIMEOUT`（默 5min）
 - 大批量（`n=4`）或 4K 分辨率请把超时往上调
 
-**重启后视频 job ID 找不到了**
-- 内存 store 重启即丢。`CLI2API_JOBSTORE_DSN=file:...` 持久化
+**视频 / 音乐 job 状态停在 `queued` 不动**
+- 检查 `CLI2API_JOB_RETENTION` 和 `CLI2API_JOB_HARD_CAP_MULT`：retention 太短 + multiplier 太小 = 还没轮询完就被 reaper 删了
+- 默认 retention=7d、multiplier=3 完全够用；调小是给短期测试用
+
+**重启后视频 / 音乐 job ID 找不到了**
+- 内存 store 重启即丢。生产用 `CLI2API_JOBSTORE_DSN=file:...` 或远端 libsql 持久化
 
 **`request body too large` (400)**
 - 单次请求上限 64 MB（image + mask + form overhead 够用）
@@ -366,6 +393,12 @@ location /v1/ {
 **SSE 在 nginx 后面不出增量？**
 `proxy_buffering off;` —— 见上文「反向代理」段。
 
+**这代码经过几次 review？质量怎么样？**
+项目用了 6 轮 reviewer + reviewee 来回（codex 3 轮 + cc 2 轮 + 实战 e2e），累计修复 **26 个真实 bug**——从凭证泄露、异步 job 永久卡死、reaper 误删活 job 到上游 schema 嵌套错误。每一轮修复都引入新 bug，最后一轮 cc review 才完全 clean。详细演进见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
+- 50+ 单元测试，每个 bug 都带专属回归
+- live e2e 实测：`make test-e2e-live` 跑通 sora-2 / seedance / nano-banana-edit / wan2.6-t2i / gpt-image-2 / speech-2.8-turbo 全部端点
+- DSN 鉴权脱敏、reaper 软硬上限、过期 token 自动跳过、4xx 区分瞬态/永久——这些边角都覆盖到了
+
 ---
 
 ## 开发
@@ -380,11 +413,17 @@ make build                 # 单二进制到 bin/cli2api
 
 ```sh
 make test-e2e              # 冷烟测：启服务 + schema/error 路径 + reaper（不打上游，1 秒跑完）
-make test-e2e-live-cheap   # 加上真实图像/语音/对话调用（约 $0.10 / 次）
-make test-e2e-live         # 全量，含 sora / veo 等视频（约 $5–20 / 次）
+make test-e2e-live-cheap   # 加上真实图像/语音/对话调用（约 $0.10 / 次，约 3 分钟）
+make test-e2e-live         # 全量，含 sora / veo 等视频（约 $5–20 / 次，约 13 分钟）
 ```
 
-冷烟测覆盖：healthz / models / inbound auth / 错误码 / 64 MB body cap / CORS / reaper 真删过期 job / Codex 修复的 nil-mapper 回归。详见 `scripts/test_e2e.py`。
+- **冷烟测**（12 项）：healthz / models / inbound auth / 错误码 / 64 MB body cap / CORS / reaper 真删过期 job / 关键回归（edit-only 模型不再 panic）
+- **Live cheap**（+5 项）：wan2.6-t2i / gpt-image-2 / nano-banana-edit / speech-2.8-turbo / music-2.5
+- **Live full**（+2 项）：sora-2 短视频 / seedance-2.0-fast
+
+测试脚本会自动检测 `MULERUN_TOKEN` 类型——`muk-` 前缀的 studio token 会跳过 4 个 chat 测试（不是失败，是 skipped），因为那些端点要 LLM gateway plane 的 token。
+
+详见 `scripts/test_e2e.py`。
 
 开发过程笔记见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
 
