@@ -1,0 +1,60 @@
+---
+title: Speech & Music
+description: Synchronous TTS bytes and asynchronous music jobs.
+icon: MusicNotes
+---
+
+## POST /v1/audio/speech
+
+Synchronous, OpenAI-compatible. The server submits to MiniMax, polls until
+ready, then **streams the audio bytes** back with chunked transfer encoding.
+
+```python
+from openai import OpenAI
+c = OpenAI(api_key="local-key", base_url="http://localhost:8080/v1")
+
+audio = c.audio.speech.create(
+    model="speech-2.8-hd",
+    voice="Charming_Lady",       # MiniMax voice ID
+    input="Hello from cli2api.",
+    response_format="mp3",       # mp3 / pcm / flac / wav / opus / aac
+)
+audio.stream_to_file("hello.mp3")
+```
+
+Supported `model`: `speech-2.8-hd`, `speech-2.8-turbo`. Fields: `input` (or
+`prompt`), `voice` (or `voice_id`), `response_format`, `speed`, `vol`, `pitch`,
+`emotion`, `language_boost`, `sample_rate`, `bitrate`, `english_normalization`.
+
+## POST /v1/audio/music + GET `/v1/audio/music/{id}`
+
+Music takes 30s–several minutes, so it's an async job like video.
+
+```python
+import time, httpx
+base = "http://localhost:8080"
+
+job = httpx.post(f"{base}/v1/audio/music", json={
+    "model": "music-2.5",
+    "prompt": "upbeat synthwave, melodic",
+    "lyrics_prompt": "[verse]\nlight the night",
+}).json()
+job_id = job["id"]            # e.g. "audio_..."
+
+while True:
+    r = httpx.get(f"{base}/v1/audio/music/{job_id}").json()
+    if r["status"] in ("completed", "failed"):
+        break
+    time.sleep(8)
+
+print(r.get("audios") or r.get("error"))
+```
+
+Supported `model`: `music-2.0`, `music-2.5`. Fields: `prompt` (style),
+`lyrics_prompt`, `lyrics_optimizer`, `audio_format`, `sample_rate`, `bitrate`.
+
+<Callout>
+If MuleRun's upstream MiniMax service is busy you may get a `failed` status with
+a `vendor_error` (e.g. code 3005). That's an upstream issue surfaced as a
+structured error — retry or try again later.
+</Callout>

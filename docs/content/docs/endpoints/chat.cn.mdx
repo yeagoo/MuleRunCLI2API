@@ -1,0 +1,82 @@
+---
+title: 文本
+description: Chat completions、messages、responses API —— 透明代理。
+icon: ChatCircle
+---
+
+三个文本端点都是 MuleRun 原生 OpenAI/Anthropic 兼容 API 的**透明代理**，保留 SSE 流式。
+
+<Callout type="warn">
+文本端点需要 **LLM gateway** token，不是 `mulerun login` 的 studio OAuth token。
+如果遇到 `401 Invalid API Key format`，见[排错](/cn/docs/troubleshooting)。
+</Callout>
+
+## POST /v1/chat/completions
+
+```sh
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $CLI2API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}'
+```
+
+## POST /v1/responses
+
+透传到 MuleRun 的 `/vendors/openai/v1/responses`（OpenAI Agents SDK 新一代入口）。
+支持 `"stream": true`；`"background": true` 走异步 job。
+
+```sh
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer $CLI2API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-5","input":"用一段话解释 Black-Scholes 公式。"}'
+```
+
+## POST /v1/messages
+
+Anthropic 形态。接受 `x-api-key` 或 `Authorization: Bearer`。
+
+```sh
+curl http://localhost:8080/v1/messages \
+  -H "x-api-key: $CLI2API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{"model":"claude-sonnet-4-6","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}'
+```
+
+## SDK 用法
+
+<Tabs items={["OpenAI", "Anthropic", "流式"]}>
+
+```python tab="OpenAI"
+from openai import OpenAI
+c = OpenAI(api_key="local-key", base_url="http://localhost:8080/v1")
+
+r = c.chat.completions.create(
+    model="gpt-5",
+    messages=[{"role": "user", "content": "hi"}],
+)
+print(r.choices[0].message.content)
+```
+
+```python tab="Anthropic"
+from anthropic import Anthropic
+a = Anthropic(api_key="local-key", base_url="http://localhost:8080")
+
+r = a.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=256,
+    messages=[{"role": "user", "content": "hi"}],
+)
+print(r.content[0].text)
+```
+
+```python tab="流式"
+for chunk in c.chat.completions.create(
+    model="gpt-5",
+    messages=[{"role": "user", "content": "讲个笑话"}],
+    stream=True,
+):
+    print(chunk.choices[0].delta.content or "", end="")
+```
+
+</Tabs>

@@ -1,0 +1,60 @@
+---
+title: Image
+description: Synchronous image generation and editing, OpenAI shape.
+icon: Image
+---
+
+## POST /v1/images/generations
+
+Synchronous — the server polls MuleRun internally until the image is ready, then
+returns OpenAI's standard `{ data: [{ url }] }` envelope.
+
+```sh
+curl http://localhost:8080/v1/images/generations \
+  -H "Authorization: Bearer $CLI2API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"wan2.6-t2i","prompt":"a synthwave fox","size":"1024x1024","n":1}'
+```
+
+Supported `model`: `gpt-image-2`, `nano-banana`, `nano-banana-pro`,
+`nano-banana-2`, `midjourney`, `wan2.6-t2i`, `wan2.6-image`,
+`wan2.5-t2i-preview`, `wan2.5-i2i-preview`.
+
+```python
+from openai import OpenAI
+c = OpenAI(api_key="local-key", base_url="http://localhost:8080/v1")
+
+r = c.images.generate(model="gpt-image-2", prompt="a vector fox logo", size="1024x1024")
+print(r.data[0].url)
+```
+
+## POST /v1/images/edits
+
+Edit an existing image with a text prompt. Accepts both `application/json`
+(images as URLs / `data:` URIs) and `multipart/form-data` (OpenAI's native file
+uploads).
+
+<Tabs items={["JSON", "multipart"]}>
+
+```sh tab="JSON"
+curl http://localhost:8080/v1/images/edits \
+  -H "Authorization: Bearer $CLI2API_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"nano-banana-edit","prompt":"add sunglasses","images":["https://input/portrait.png"]}'
+```
+
+```sh tab="multipart"
+curl http://localhost:8080/v1/images/edits \
+  -F "model=gpt-image-2-edit" -F "image=@photo.png" \
+  -F "prompt=oil painting" -F "size=1024x1024"
+```
+
+</Tabs>
+
+Supported `model` (always `-edit` suffix to disambiguate from generation):
+`gpt-image-2-edit` (supports `mask`), `nano-banana-edit`,
+`nano-banana-pro-edit`, `nano-banana-2-edit`, `wan2.5-i2i-preview-edit`.
+
+<Callout>
+The OpenAI SDK's `images.edit()` only accepts file objects, not URL strings. To
+edit by URL, use the raw JSON path with `httpx` and the `images` array.
+</Callout>

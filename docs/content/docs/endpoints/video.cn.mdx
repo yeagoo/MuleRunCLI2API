@@ -1,0 +1,62 @@
+---
+title: 视频
+description: 异步视频生成 —— 提交 + 轮询。
+icon: VideoCamera
+---
+
+视频通常要几十秒到几分钟，所以 cli2api 返回一个 job ID，由客户端轮询。
+
+## POST /v1/videos + GET `/v1/videos/{id}`
+
+```python
+import time, httpx
+base = "http://localhost:8080"
+
+# 提交
+job = httpx.post(f"{base}/v1/videos", json={
+    "model": "sora-2",
+    "prompt": "a fox jumps over a creek",
+    "seconds": "4",
+}).json()
+job_id = job["id"]            # 形如 "video_a3xq2..."
+
+# 轮询
+while True:
+    r = httpx.get(f"{base}/v1/videos/{job_id}").json()
+    if r["status"] in ("completed", "failed"):
+        break
+    time.sleep(5)
+
+print(r.get("videos") or r.get("error"))
+```
+
+`status` 取值：`queued` / `in_progress` / `completed` / `failed`。
+
+## 支持的模型
+
+用列出的名字原样传——`t2v` / `i2v` 是独立条目。
+
+| 厂商 | 模型 |
+|------|------|
+| **OpenAI** | `sora`、`sora-2`、`sora-2-pro` |
+| **Google** | `veo`（聚合端点，body 里设 `model` 选 `veo-3.1`/`veo-3.1-fast`/`veo-3`）；`veo3`、`veo-3.0`、`veo-3.1`、`veo-3.1-fast` |
+| **Kling v2** | `kling-v2.1-master-{text,image}-to-video`、`kling-v2.5-turbo-…`、`kling-v2.6-…` |
+| **Kling v3** | `kling-v3-text-to-video`、`kling-v3-image-to-video`（用 `first_frame`） |
+| **Kling v3 Omni** | `kling-v3-omni-{text,image,reference-image,reference-video}-to-video`、`kling-v3-omni-video-to-video-edit` |
+| **ByteDance Seedance** | `seedance-2.0-{text,image,reference}-to-video`、`seedance-2.0-fast-*` |
+| **Alibaba Wan** | `wan2.6-t2v`、`wan2.6-i2v`、`wan2.5-t2v-preview`、`wan2.5-i2v-preview`、`wan2.2-*`、`wan2.1-vace-plus`、`wan2.1-kf2v-plus` |
+| **Alibaba happy-horse** | `happy-horse-1-0-t2v`、`happy-horse-1-0-i2v` |
+| **MuleRouter** | `wan2.5-t2v-spark`、`wan2.5-i2v-spark`、`wan2.6-t2v-spark`、`wan2.6-i2v-spark` |
+| **Midjourney** | `midjourney-video` |
+
+## 通用字段
+
+`prompt`、`negative_prompt`、`image`、`first_frame`、`last_frame`、`video`、
+`reference_images`、`images`、`aspect_ratio`、`resolution`、`size`、`duration`、
+`seconds`、`seed`、`mode`、`sound`、`generate_audio`、`multi_shot`、
+`multi_prompt`、`shot_type`、`elements`、`keep_audio`。`extra: {...}` 透传到上游。
+
+<Callout title="Job 持久化">
+默认 jobs 存内存，重启会丢。设 `CLI2API_JOBSTORE_DSN` 指向 libsql 文件或远端
+持久化。见[部署](/cn/docs/deployment)。
+</Callout>

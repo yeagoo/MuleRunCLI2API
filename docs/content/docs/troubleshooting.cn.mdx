@@ -1,0 +1,66 @@
+---
+title: 排错
+description: 常见错误与 FAQ。
+icon: Wrench
+---
+
+## 常见错误
+
+### `no mulerun credentials found`
+跑 `mulerun login`，或 `export MULERUN_TOKEN=mr_xxx`。启动日志的 `token_source`
+字段显示读了哪个文件/环境变量。
+
+### `/v1/chat/completions` 返回 401 `Invalid API Key format`
+studio OAuth token 不能调文本端点——MuleRun 有两套独立认证系统。从 MuleRun
+控制台拿单独的 LLM gateway key，赋给 `MULERUN_TOKEN`。图像/视频/音频端点不受影响
+（它们用 studio 平面 token）。
+
+### `502 upstream HTTP 401`
+上游 token 过期或被拒。重新登录 / 换 token。OAuth cache 有 `expires_at`，cli2api
+会跳过过期 token，但最简单还是 `mulerun login` 一遍。
+
+### `vendor_error: code 3005 / 3006 / ...`
+这是真实的上游错误（MiniMax/Seedance/Wan 服务自身挂了）。cli2api 工作正常——它把
+结构化的上游错误传给客户端。重试或换模型。
+
+### `404 unknown image model: dall-e-3`
+cli2api **不**把 OpenAI 名映射到 MuleRun。请用真名（`gpt-image-2` / `wan2.6-t2i`
+/ `midjourney`）。跑 `curl localhost:8080/v1/models | jq '.data[].id'` 看完整列表。
+
+### 视频 / 音乐 job 卡在 `queued`
+检查 `CLI2API_JOB_RETENTION` 和 `CLI2API_JOB_HARD_CAP_MULT`：retention 太短 +
+multiplier 太小，reaper 会在轮询完成前删掉 job。默认（7d / 3×）够用，只在短期测试
+时才调小。
+
+### 重启后 job ID 找不到了
+内存 store 重启即丢。用 `CLI2API_JOBSTORE_DSN=file:...` 或远端 libsql 持久化。
+
+### `request body too large` (400)
+单次请求上限 64 MB。这是 chi 的 `RequestSize` 中间件，包装成 OpenAI 风格 400。
+
+### SSE 流式响应不出增量
+反向代理没关 `proxy_buffering`——nginx / Caddy 都要单独配。另外确认客户端用
+`stream=True`，不是 `json()` 整收。
+
+## FAQ
+
+### 为什么做代理而不直接调 MuleRun？
+`/v1/chat/completions` 和 `/v1/messages` 本来就兼容，想直接调也行。但图像/视频/音频
+走 `/vendors/{vendor}/...` 异步 job 形式，跟 OpenAI 完全不同。cli2api 把这层隐藏掉，
+让现有 SDK 代码不改就能跑。
+
+### 会缓存结果吗？
+不会。每次调用都是新的 MuleRun task。要缓存在应用层或 CDN 层做。
+
+### 能跑在 Lambda / Cloud Function 里吗？
+文本和图像同步端点可以。视频/音乐显式异步——客户端轮询，实例随便重启。配合 libsql
+持久化 store 即可。
+
+### 多租户怎么办？
+没有内置用户/配额。`CLI2API_API_KEYS` 是平面 allow-list。要做配额请放在 API 网关后面。
+
+### 这代码经过几次 review？
+项目用了 6 轮 reviewer/reviewee 来回（codex ×3 + cc ×2 + 实战 e2e），修复 26 个
+真实 bug——凭证泄露、异步 job 永久卡死、reaper 误删活 job、上游 schema 嵌套错误。
+50+ 单元测试，每个 bug 都带回归。详见
+[DEVELOPMENT.md](https://github.com/yeagoo/MuleRunCLI2API/blob/master/DEVELOPMENT.md)。

@@ -1,0 +1,59 @@
+---
+title: 语音与音乐
+description: 同步 TTS 字节流，异步音乐 job。
+icon: MusicNotes
+---
+
+## POST /v1/audio/speech
+
+同步、OpenAI 兼容。服务端提交到 MiniMax，轮询直到就绪，然后用 chunked transfer
+**流式返回音频字节**。
+
+```python
+from openai import OpenAI
+c = OpenAI(api_key="local-key", base_url="http://localhost:8080/v1")
+
+audio = c.audio.speech.create(
+    model="speech-2.8-hd",
+    voice="Charming_Lady",       # MiniMax voice ID
+    input="Hello from cli2api.",
+    response_format="mp3",       # mp3 / pcm / flac / wav / opus / aac
+)
+audio.stream_to_file("hello.mp3")
+```
+
+支持 `model`：`speech-2.8-hd`、`speech-2.8-turbo`。字段：`input`（或 `prompt`）、
+`voice`（或 `voice_id`）、`response_format`、`speed`、`vol`、`pitch`、`emotion`、
+`language_boost`、`sample_rate`、`bitrate`、`english_normalization`。
+
+## POST /v1/audio/music + GET `/v1/audio/music/{id}`
+
+音乐生成要 30 秒到几分钟，所以跟视频一样是异步 job。
+
+```python
+import time, httpx
+base = "http://localhost:8080"
+
+job = httpx.post(f"{base}/v1/audio/music", json={
+    "model": "music-2.5",
+    "prompt": "upbeat synthwave, melodic",
+    "lyrics_prompt": "[verse]\nlight the night",
+}).json()
+job_id = job["id"]            # 形如 "audio_..."
+
+while True:
+    r = httpx.get(f"{base}/v1/audio/music/{job_id}").json()
+    if r["status"] in ("completed", "failed"):
+        break
+    time.sleep(8)
+
+print(r.get("audios") or r.get("error"))
+```
+
+支持 `model`：`music-2.0`、`music-2.5`。字段：`prompt`（风格）、`lyrics_prompt`、
+`lyrics_optimizer`、`audio_format`、`sample_rate`、`bitrate`。
+
+<Callout>
+如果 MuleRun 上游 MiniMax 服务繁忙，可能返回 `failed` 状态带 `vendor_error`
+（如 code 3005）。这是上游问题，被结构化地传给客户端——重试或稍后再试。
+</Callout>

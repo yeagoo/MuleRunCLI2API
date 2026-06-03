@@ -1,0 +1,46 @@
+---
+title: 部署
+description: Docker、持久化 job 存储、反向代理。
+icon: Cloud
+---
+
+## Docker
+
+```sh
+docker compose up --build
+```
+
+`docker-compose.yml` 里两种凭证方式：`MULERUN_TOKEN` 环境变量，或挂
+`~/.config/mulerun` + `~/.mulerun` 到容器。
+
+## 持久化 job 存储
+
+默认 jobs 存内存，重启会丢。生产环境建议持久化：
+
+```sh
+# 本地 libsql 文件（纯 Go 驱动，零依赖）
+CLI2API_JOBSTORE_DSN=file:/var/lib/cli2api/jobs.db ./cli2api
+
+# 远端 Turso / sqld
+CLI2API_JOBSTORE_DSN="libsql://your-db.turso.io?authToken=$TURSO_TOKEN" ./cli2api
+```
+
+DSN 的鉴权部分在启动日志里会自动脱敏，可以放心写入日志聚合系统。
+
+## 反向代理（nginx）
+
+流式端点要关掉 buffering，否则 SSE 和音频流会被卡住：
+
+```nginx
+location /v1/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_buffering off;          # SSE + 音频流式
+    proxy_read_timeout 600s;      # 长轮询 / 同步图像最长 5 min
+    client_max_body_size 64M;     # multipart 图像编辑
+}
+```
+
+## Vercel（文档站）
+
+本文档站位于 `docs/`。部署时把 Vercel 项目 root 指到 `docs/` 即可——它是标准的
+Next.js 应用。

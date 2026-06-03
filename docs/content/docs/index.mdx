@@ -1,0 +1,59 @@
+---
+title: Overview
+description: OpenAI / Anthropic-compatible HTTP proxy for MuleRun's multimodal generation.
+icon: House
+---
+
+**cli2api** wraps [MuleRun](https://mulerun.com)'s text, image, video, speech and
+music generation behind **OpenAI- and Anthropic-compatible** HTTP endpoints.
+Point your existing `openai` / `anthropic` SDK at it via `base_url` — no business
+code changes.
+
+A single Go binary (~12 MB), distroless-image ready, zero CGO.
+
+## What it does
+
+<Cards>
+  <Card icon={<span />} title="Text" href="/docs/endpoints/chat">
+    `/v1/chat/completions`, `/v1/messages`, `/v1/responses` — thin proxies with SSE streaming.
+  </Card>
+  <Card title="Image" href="/docs/endpoints/images">
+    `/v1/images/generations` + `/v1/images/edits` — synchronous, OpenAI shape.
+  </Card>
+  <Card title="Video" href="/docs/endpoints/video">
+    `/v1/videos` submit + poll — async jobs (Sora, Veo, Kling, Seedance, Wan).
+  </Card>
+  <Card title="Speech & Music" href="/docs/endpoints/audio">
+    `/v1/audio/speech` (sync bytes) + `/v1/audio/music` (async job).
+  </Card>
+</Cards>
+
+## Why a proxy?
+
+MuleRun's `/v1/chat/completions` and `/v1/messages` are already OpenAI/Anthropic
+compatible — you can call them directly. But image/video/audio go through a
+`/vendors/{vendor}/...` **async job** shape that looks nothing like the OpenAI
+API. cli2api hides that difference so your existing SDK code runs unchanged:
+
+- **synchronous** image & speech endpoints internally poll MuleRun until done
+- **asynchronous** video & music endpoints expose a clean submit + poll job API
+- **70+ models** registered: `gpt-image-2`, `nano-banana` family, `sora-2`,
+  `veo`, `kling-v3-omni`, `wan2.6-*`, `midjourney`, `seedance-2.0-*`,
+  `speech-2.8-hd`, `music-2.5`, …
+
+## Next steps
+
+<Cards>
+  <Card icon={<span />} title="Quickstart" href="/docs/quickstart">
+    Get running in 5 minutes.
+  </Card>
+  <Card title="Installation" href="/docs/installation">
+    Prebuilt binary, source build, or Docker.
+  </Card>
+  <Card title="Models" href="/docs/models">
+    The full catalog of supported models.
+  </Card>
+  <Card title="Configuration" href="/docs/configuration">
+    Every environment variable.
+  </Card>
+</Cards>

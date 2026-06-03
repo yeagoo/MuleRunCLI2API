@@ -1,0 +1,70 @@
+---
+title: Installation
+description: Prebuilt binary, source build, or Docker.
+icon: Download
+---
+
+## Prebuilt binary
+
+Each `v*` tag publishes static, CGO-free binaries on the
+[Releases page](https://github.com/yeagoo/MuleRunCLI2API/releases) for
+linux/darwin × amd64/arm64.
+
+```sh
+# Linux x86-64 (swap the suffix for your platform)
+curl -sSL -o cli2api \
+  https://github.com/yeagoo/MuleRunCLI2API/releases/latest/download/cli2api-linux-amd64
+chmod +x cli2api
+./cli2api --version
+```
+
+Asset naming: `cli2api-<version>-{linux,darwin}-{amd64,arm64}`. Each has a
+`.sha256` sidecar, plus an aggregate `SHA256SUMS.txt`:
+
+```sh
+sha256sum -c SHA256SUMS.txt
+```
+
+## From source
+
+Requires Go ≥ 1.25.
+
+```sh
+git clone https://github.com/yeagoo/MuleRunCLI2API cli2api && cd cli2api
+make build         # version injected from `git describe --tags`
+./bin/cli2api --version
+```
+
+## Docker
+
+```sh
+docker compose up --build
+```
+
+`docker-compose.yml` documents two credential-injection styles:
+
+- **A** — `MULERUN_TOKEN` env var (simplest)
+- **B** — mount `~/.config/mulerun` + `~/.mulerun` into the container (reuse the
+  host's OAuth cache)
+
+mulerun-cli ≥0.1.0 stores the token at `~/.config/mulerun/oauth_cache.json`;
+older versions at `~/.mulerun/`. Mount whichever matches your installed version.
+
+## systemd
+
+```ini
+[Unit]
+Description=cli2api
+After=network.target
+
+[Service]
+Environment=MULERUN_TOKEN=mr_xxxxx
+Environment=CLI2API_API_KEYS=sk-prod-key-1
+Environment=CLI2API_JOBSTORE_DSN=file:/var/lib/cli2api/jobs.db
+ExecStart=/usr/local/bin/cli2api
+Restart=on-failure
+User=cli2api
+
+[Install]
+WantedBy=multi-user.target
+```

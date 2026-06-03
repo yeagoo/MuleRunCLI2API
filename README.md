@@ -5,6 +5,8 @@
 
 单二进制 Go 服务（~7 MB），distroless 镜像可用，零 CGO 依赖。
 
+> 📖 **完整文档站**（中英双语，Fumadocs）：见 [`docs/`](./docs) —— 本地 `cd docs && pnpm install && pnpm dev`，或部署到 Vercel（root 指向 `docs/`）。
+
 ---
 
 ## 它能干什么

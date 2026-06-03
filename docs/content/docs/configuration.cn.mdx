@@ -1,0 +1,39 @@
+---
+title: 配置
+description: 所有环境变量。
+icon: Gear
+---
+
+| 环境变量 | 默认 | 说明 |
+|----------|------|------|
+| `CLI2API_PORT` | `8080` | HTTP 监听端口 |
+| `CLI2API_API_KEYS` | *(空)* | 入站 API key 白名单（逗号分隔）；空 = 不鉴权 |
+| `CLI2API_JOBSTORE_DSN` | *(空 = 内存)* | libsql DSN（`file:...` / `libsql://...?authToken=...`） |
+| `CLI2API_JOB_RETENTION` | `168h` | job 行保留时长；`0s` = 不过期（reaper 跳过 sweep） |
+| `CLI2API_REAPER_INTERVAL` | `1h` | reaper 扫描周期；`0s` = 禁用 |
+| `CLI2API_JOB_HARD_CAP_MULT` | `3.0` | in-flight job 硬上限倍数（`expires_at + retention × N` 后强删）。范围 1.0–1000.0 |
+| `CLI2API_IMAGE_TIMEOUT` | `5m` | 同步图像/语音最长等待 |
+| `CLI2API_POLL_INTERVAL` | `2s` | 上游轮询初始周期 |
+| `CLI2API_POLL_MAX_INTERVAL` | `10s` | 轮询退避上限 |
+| `CLI2API_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+| `MULERUN_TOKEN` | *(读 `~/.config/mulerun/oauth_cache.json` 再 `~/.mulerun/`)* | 上游 MuleRun token |
+| `MULERUN_API_BASE_URL` | `https://api.mulerun.com` | 上游 base URL |
+
+仓库里的 `.env.example` 有可复制的模板。
+
+## 凭证发现顺序
+
+1. `MULERUN_TOKEN` 环境变量
+2. `~/.config/mulerun/oauth_cache.json`（mulerun-cli ≥0.1.0）—— 尊重
+   `expires_at`，过期 token 会被跳过
+3. `~/.mulerun/{auth,credentials,token}.json`（旧版本）
+
+启动日志的 `token_source` 字段显示用了哪个来源。
+
+## Reaper 保留期语义
+
+- **终态 job**（`completed` / `failed`）：`expires_at` 一过就删
+- **in-flight job**（`queued` / `in_progress`）：保留到
+  `expires_at + retention × CLI2API_JOB_HARD_CAP_MULT`（默认 3×）—— 给客户端
+  足够时间继续轮询
+- `CLI2API_JOB_RETENTION=0` 整体禁用 sweep —— 任何 job 都不会被自动删

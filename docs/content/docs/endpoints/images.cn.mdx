@@ -1,0 +1,57 @@
+---
+title: 图像
+description: 同步图像生成与编辑，OpenAI 形态。
+icon: Image
+---
+
+## POST /v1/images/generations
+
+同步——服务端内部轮询 MuleRun 直到图像就绪，然后返回 OpenAI 标准的
+`{ data: [{ url }] }` 形态。
+
+```sh
+curl http://localhost:8080/v1/images/generations \
+  -H "Authorization: Bearer $CLI2API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"wan2.6-t2i","prompt":"a synthwave fox","size":"1024x1024","n":1}'
+```
+
+支持 `model`：`gpt-image-2`、`nano-banana`、`nano-banana-pro`、`nano-banana-2`、
+`midjourney`、`wan2.6-t2i`、`wan2.6-image`、`wan2.5-t2i-preview`、`wan2.5-i2i-preview`。
+
+```python
+from openai import OpenAI
+c = OpenAI(api_key="local-key", base_url="http://localhost:8080/v1")
+
+r = c.images.generate(model="gpt-image-2", prompt="a vector fox logo", size="1024x1024")
+print(r.data[0].url)
+```
+
+## POST /v1/images/edits
+
+用文字 prompt 编辑已有图像。同时接受 `application/json`（图像传 URL / `data:` URI）
+和 `multipart/form-data`（OpenAI 原生文件上传）。
+
+<Tabs items={["JSON", "multipart"]}>
+
+```sh tab="JSON"
+curl http://localhost:8080/v1/images/edits \
+  -H "Authorization: Bearer $CLI2API_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"nano-banana-edit","prompt":"add sunglasses","images":["https://input/portrait.png"]}'
+```
+
+```sh tab="multipart"
+curl http://localhost:8080/v1/images/edits \
+  -F "model=gpt-image-2-edit" -F "image=@photo.png" \
+  -F "prompt=oil painting" -F "size=1024x1024"
+```
+
+</Tabs>
+
+支持 `model`（一律带 `-edit` 后缀以区分生成）：`gpt-image-2-edit`（支持 `mask`）、
+`nano-banana-edit`、`nano-banana-pro-edit`、`nano-banana-2-edit`、`wan2.5-i2i-preview-edit`。
+
+<Callout>
+OpenAI SDK 的 `images.edit()` 只接受文件对象，不接 URL 字符串。要按 URL 编辑，
+用 `httpx` 走原始 JSON 路径，传 `images` 数组。
+</Callout>

@@ -1,0 +1,43 @@
+---
+title: 模型清单
+description: 所有支持的模型。
+icon: Cube
+---
+
+已注册 70+ 模型。`GET /v1/models` 返回实时清单；下面按 surface 分组。
+
+## 图像 — `/v1/images/generations`
+
+| 厂商 | 模型 |
+|------|------|
+| OpenAI | `gpt-image-2` |
+| Google | `nano-banana`、`nano-banana-pro`、`nano-banana-2` |
+| Midjourney | `midjourney` |
+| Alibaba Wan | `wan2.6-t2i`、`wan2.6-image`、`wan2.5-t2i-preview`、`wan2.5-i2i-preview` |
+
+## 图像编辑 — `/v1/images/edits`
+
+`gpt-image-2-edit`（支持 `mask`）、`nano-banana-edit`、`nano-banana-pro-edit`、
+`nano-banana-2-edit`、`wan2.5-i2i-preview-edit`。
+
+## 视频 — `/v1/videos`
+
+完整表格见[视频端点](/cn/docs/endpoints/video#支持的模型)（OpenAI Sora、
+Google Veo、Kling v2/v3/v3-omni、ByteDance Seedance、Alibaba Wan + happy-horse、
+MuleRouter spark、Midjourney）。
+
+## 语音与音乐
+
+- TTS：`speech-2.8-hd`、`speech-2.8-turbo`（MiniMax）
+- 音乐：`music-2.0`、`music-2.5`（MiniMax）
+
+## 文本（代理）
+
+任何 MuleRun 支持的 chat / messages / responses 模型都能用——cli2api 不解析
+`model` 字段，原样转发。
+
+<Callout type="warn" title="不做别名映射">
+cli2api **不**把 OpenAI 模型名映射到 MuleRun。请用 MuleRun 真名
+（`gpt-image-2`、`wan2.6-t2i`、`midjourney`）——不是 `dall-e-3`。别名会让客户端
+误以为在调 OpenAI，行为差异很难排查。
+</Callout>

@@ -1,0 +1,39 @@
+---
+title: Configuration
+description: Every environment variable.
+icon: Gear
+---
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CLI2API_PORT` | `8080` | HTTP listen port |
+| `CLI2API_API_KEYS` | *(empty)* | Comma-separated inbound API key allow-list; empty = no auth |
+| `CLI2API_JOBSTORE_DSN` | *(empty = memory)* | libsql DSN (`file:...` / `libsql://...?authToken=...`) |
+| `CLI2API_JOB_RETENTION` | `168h` | Job row retention; `0s` = never expire (reaper skips sweeps) |
+| `CLI2API_REAPER_INTERVAL` | `1h` | Reaper sweep period; `0s` = disabled |
+| `CLI2API_JOB_HARD_CAP_MULT` | `3.0` | Hard-cap multiplier for in-flight jobs (force-delete past `expires_at + retention × N`). Range 1.0–1000.0 |
+| `CLI2API_IMAGE_TIMEOUT` | `5m` | Max wait for sync image/speech generation |
+| `CLI2API_POLL_INTERVAL` | `2s` | Initial upstream poll cadence |
+| `CLI2API_POLL_MAX_INTERVAL` | `10s` | Poll backoff ceiling |
+| `CLI2API_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+| `MULERUN_TOKEN` | *(reads `~/.config/mulerun/oauth_cache.json` then `~/.mulerun/`)* | Upstream MuleRun token |
+| `MULERUN_API_BASE_URL` | `https://api.mulerun.com` | Upstream base URL |
+
+See `.env.example` in the repo for a copy-paste template.
+
+## Credential discovery order
+
+1. `MULERUN_TOKEN` env var
+2. `~/.config/mulerun/oauth_cache.json` (mulerun-cli ≥0.1.0) — respects
+   `expires_at`; an expired token is skipped
+3. `~/.mulerun/{auth,credentials,token}.json` (older versions)
+
+The startup log's `token_source` field shows which source was used.
+
+## Reaper retention semantics
+
+- **Terminal jobs** (`completed` / `failed`): deleted once `expires_at` passes
+- **In-flight jobs** (`queued` / `in_progress`): kept until
+  `expires_at + retention × CLI2API_JOB_HARD_CAP_MULT` (default 3×) — gives a
+  client time to keep polling
+- `CLI2API_JOB_RETENTION=0` disables the sweep entirely — nothing is auto-deleted

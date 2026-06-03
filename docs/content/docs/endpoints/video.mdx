@@ -1,0 +1,65 @@
+---
+title: Video
+description: Asynchronous video generation — submit and poll.
+icon: VideoCamera
+---
+
+Video takes tens of seconds to minutes, so cli2api returns a job ID and the
+client polls.
+
+## POST /v1/videos + GET `/v1/videos/{id}`
+
+```python
+import time, httpx
+base = "http://localhost:8080"
+
+# submit
+job = httpx.post(f"{base}/v1/videos", json={
+    "model": "sora-2",
+    "prompt": "a fox jumps over a creek",
+    "seconds": "4",
+}).json()
+job_id = job["id"]            # e.g. "video_a3xq2..."
+
+# poll
+while True:
+    r = httpx.get(f"{base}/v1/videos/{job_id}").json()
+    if r["status"] in ("completed", "failed"):
+        break
+    time.sleep(5)
+
+print(r.get("videos") or r.get("error"))
+```
+
+`status` ∈ `queued` / `in_progress` / `completed` / `failed`.
+
+## Supported models
+
+Use the listed name verbatim — `t2v` / `i2v` are distinct entries.
+
+| Vendor | Models |
+|--------|--------|
+| **OpenAI** | `sora`, `sora-2`, `sora-2-pro` |
+| **Google** | `veo` (aggregated; set body `model` to `veo-3.1`/`veo-3.1-fast`/`veo-3`); `veo3`, `veo-3.0`, `veo-3.1`, `veo-3.1-fast` |
+| **Kling v2** | `kling-v2.1-master-{text,image}-to-video`, `kling-v2.5-turbo-…`, `kling-v2.6-…` |
+| **Kling v3** | `kling-v3-text-to-video`, `kling-v3-image-to-video` (uses `first_frame`) |
+| **Kling v3 Omni** | `kling-v3-omni-{text,image,reference-image,reference-video}-to-video`, `kling-v3-omni-video-to-video-edit` |
+| **ByteDance Seedance** | `seedance-2.0-{text,image,reference}-to-video`, `seedance-2.0-fast-*` |
+| **Alibaba Wan** | `wan2.6-t2v`, `wan2.6-i2v`, `wan2.5-t2v-preview`, `wan2.5-i2v-preview`, `wan2.2-*`, `wan2.1-vace-plus`, `wan2.1-kf2v-plus` |
+| **Alibaba happy-horse** | `happy-horse-1-0-t2v`, `happy-horse-1-0-i2v` |
+| **MuleRouter** | `wan2.5-t2v-spark`, `wan2.5-i2v-spark`, `wan2.6-t2v-spark`, `wan2.6-i2v-spark` |
+| **Midjourney** | `midjourney-video` |
+
+## Common fields
+
+`prompt`, `negative_prompt`, `image`, `first_frame`, `last_frame`, `video`,
+`reference_images`, `images`, `aspect_ratio`, `resolution`, `size`, `duration`,
+`seconds`, `seed`, `mode`, `sound`, `generate_audio`, `multi_shot`,
+`multi_prompt`, `shot_type`, `elements`, `keep_audio`. Anything under
+`extra: {...}` is forwarded verbatim to the upstream body.
+
+<Callout title="Job persistence">
+By default jobs live in memory and are lost on restart. Set
+`CLI2API_JOBSTORE_DSN` to a libsql file or remote endpoint to persist. See
+[Deployment](/docs/deployment).
+</Callout>

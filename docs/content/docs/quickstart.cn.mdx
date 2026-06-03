@@ -1,0 +1,74 @@
+---
+title: 快速开始
+description: 5 分钟跑起来 cli2api。
+icon: Rocket
+---
+
+## 1. 登录 MuleRun 拿上游凭证
+
+```sh
+npm i -g @mulerunai/cli
+mulerun login   # 浏览器 OAuth；token 自动存到 ~/.config/mulerun/
+                # （mulerun-cli >=0.1.0；旧版本是 ~/.mulerun/）
+```
+
+或者直接设 token：`export MULERUN_TOKEN=mr_xxxxxxxxxxxxxxx`。
+
+<Callout type="warn" title="两套 token 平面">
+`mulerun login` 拿到的 OAuth token 走 **studio 平面**（图像/视频/音频）。
+**文本端点**（`/v1/chat/completions`、`/v1/messages`、`/v1/responses`）需要单独的
+LLM gateway key（MuleRun 控制台另发）—— 这是 MuleRun 自己的两套独立认证系统，
+不是 cli2api 的限制。详见[排错](/cn/docs/troubleshooting)。
+</Callout>
+
+## 2. 构建并启动
+
+<Tabs items={["预编译二进制", "源码构建"]}>
+
+```sh tab="预编译二进制"
+curl -sSL -o cli2api \
+  https://github.com/yeagoo/MuleRunCLI2API/releases/latest/download/cli2api-linux-amd64
+chmod +x cli2api
+./cli2api
+```
+
+```sh tab="源码构建"
+git clone https://github.com/yeagoo/MuleRunCLI2API cli2api && cd cli2api
+make build     # 版本号自动从 git tag 注入
+./bin/cli2api
+```
+
+</Tabs>
+
+启动后你会看到：
+
+```json
+{"level":"INFO","msg":"startup","version":"v0.1.0","addr":":8080",
+ "registered_models":61,"jobstore":"memory","auth_required":false,
+ "token_source":"file:/home/you/.config/mulerun/oauth_cache.json"}
+```
+
+`token_source` 字段告诉你凭证从哪儿读到的。如果启动失败显示
+`no mulerun credentials found`，跑一次 `mulerun login` 或设 `MULERUN_TOKEN`。
+
+## 3. 第一次调用
+
+```sh
+curl http://localhost:8080/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{"model":"wan2.6-t2i","prompt":"a synthwave fox","size":"1024x1024"}'
+# → {"created":1733...,"data":[{"url":"https://cdn.mulerun.com/..."}]}
+```
+
+完事。
+
+## 4.（可选）入站鉴权
+
+默认无鉴权——仅本地用没问题。要对外发布就加一个白名单：
+
+```sh
+CLI2API_API_KEYS=sk-team1,sk-team2 ./cli2api
+```
+
+之后每个请求必须带 `Authorization: Bearer sk-team1`（OpenAI 风格）或
+`x-api-key: sk-team1`（Anthropic 风格）。

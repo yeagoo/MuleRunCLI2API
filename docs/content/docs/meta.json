@@ -1,0 +1,16 @@
+{
+  "title": "cli2api",
+  "root": true,
+  "pages": [
+    "index",
+    "quickstart",
+    "installation",
+    "---端点 Endpoints---",
+    "endpoints",
+    "---参考 Reference---",
+    "models",
+    "configuration",
+    "deployment",
+    "troubleshooting"
+  ]
+}

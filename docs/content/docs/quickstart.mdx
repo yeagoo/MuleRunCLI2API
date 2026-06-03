@@ -1,0 +1,77 @@
+---
+title: Quickstart
+description: Get cli2api running in 5 minutes.
+icon: Rocket
+---
+
+## 1. Log in to MuleRun for upstream credentials
+
+```sh
+npm i -g @mulerunai/cli
+mulerun login   # browser OAuth; token cached at ~/.config/mulerun/
+                # (mulerun-cli >=0.1.0; older versions use ~/.mulerun/)
+```
+
+Or set a token directly: `export MULERUN_TOKEN=mr_xxxxxxxxxxxxxxx`.
+
+<Callout type="warn" title="Two token planes">
+The OAuth token from `mulerun login` works on the **studio plane** (image /
+video / audio). The **text endpoints** (`/v1/chat/completions`, `/v1/messages`,
+`/v1/responses`) need a separate LLM-gateway key issued by the MuleRun console —
+that's MuleRun's own two-system design, not a cli2api limitation. See
+[Troubleshooting](/docs/troubleshooting).
+</Callout>
+
+## 2. Build and start
+
+<Tabs items={["Prebuilt binary", "From source"]}>
+
+```sh tab="Prebuilt binary"
+curl -sSL -o cli2api \
+  https://github.com/yeagoo/MuleRunCLI2API/releases/latest/download/cli2api-linux-amd64
+chmod +x cli2api
+./cli2api
+```
+
+```sh tab="From source"
+git clone https://github.com/yeagoo/MuleRunCLI2API cli2api && cd cli2api
+make build     # version stamped from the git tag
+./bin/cli2api
+```
+
+</Tabs>
+
+On startup you'll see:
+
+```json
+{"level":"INFO","msg":"startup","version":"v0.1.0","addr":":8080",
+ "registered_models":61,"jobstore":"memory","auth_required":false,
+ "token_source":"file:/home/you/.config/mulerun/oauth_cache.json"}
+```
+
+The `token_source` field tells you where the credential came from. If startup
+fails with `no mulerun credentials found`, run `mulerun login` or set
+`MULERUN_TOKEN`.
+
+## 3. First call
+
+```sh
+curl http://localhost:8080/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{"model":"wan2.6-t2i","prompt":"a synthwave fox","size":"1024x1024"}'
+# → {"created":1733...,"data":[{"url":"https://cdn.mulerun.com/..."}]}
+```
+
+Done.
+
+## 4. (Optional) Inbound auth
+
+No auth by default — fine for local use. To expose it publicly, add an
+allow-list:
+
+```sh
+CLI2API_API_KEYS=sk-team1,sk-team2 ./cli2api
+```
+
+Every request must then carry `Authorization: Bearer sk-team1` (OpenAI style)
+or `x-api-key: sk-team1` (Anthropic style).

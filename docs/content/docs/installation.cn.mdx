@@ -1,0 +1,69 @@
+---
+title: 安装
+description: 预编译二进制、源码构建、或 Docker。
+icon: Download
+---
+
+## 预编译二进制
+
+每个 `v*` tag 会在
+[Releases 页](https://github.com/yeagoo/MuleRunCLI2API/releases)
+发布 linux/darwin × amd64/arm64 的静态、零 CGO 二进制。
+
+```sh
+# Linux x86-64（按平台换后缀）
+curl -sSL -o cli2api \
+  https://github.com/yeagoo/MuleRunCLI2API/releases/latest/download/cli2api-linux-amd64
+chmod +x cli2api
+./cli2api --version
+```
+
+资产命名：`cli2api-<version>-{linux,darwin}-{amd64,arm64}`。每个附带 `.sha256`，
+整体有 `SHA256SUMS.txt`：
+
+```sh
+sha256sum -c SHA256SUMS.txt
+```
+
+## 源码构建
+
+需要 Go ≥ 1.25。
+
+```sh
+git clone https://github.com/yeagoo/MuleRunCLI2API cli2api && cd cli2api
+make build         # 版本号从 `git describe --tags` 注入
+./bin/cli2api --version
+```
+
+## Docker
+
+```sh
+docker compose up --build
+```
+
+`docker-compose.yml` 里注释好了两种凭证注入方式：
+
+- **A** —— `MULERUN_TOKEN` 环境变量（最简单）
+- **B** —— 挂 `~/.config/mulerun` + `~/.mulerun` 到容器（复用宿主的 OAuth cache）
+
+mulerun-cli ≥0.1.0 token 在 `~/.config/mulerun/oauth_cache.json`，旧版本在
+`~/.mulerun/`，挂哪一个看你装的版本。
+
+## systemd
+
+```ini
+[Unit]
+Description=cli2api
+After=network.target
+
+[Service]
+Environment=MULERUN_TOKEN=mr_xxxxx
+Environment=CLI2API_API_KEYS=sk-prod-key-1
+Environment=CLI2API_JOBSTORE_DSN=file:/var/lib/cli2api/jobs.db
+ExecStart=/usr/local/bin/cli2api
+Restart=on-failure
+User=cli2api
+
+[Install]
+WantedBy=multi-user.target
+```

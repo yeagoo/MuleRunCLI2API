@@ -1,0 +1,74 @@
+---
+title: Troubleshooting
+description: Common errors and FAQ.
+icon: Wrench
+---
+
+## Common errors
+
+### `no mulerun credentials found`
+Run `mulerun login`, or `export MULERUN_TOKEN=mr_xxx`. The startup log's
+`token_source` field shows which file/env it read.
+
+### `/v1/chat/completions` returns 401 `Invalid API Key format`
+The studio OAuth token can't call the text endpoints — MuleRun runs two
+independent auth systems. Get a separate LLM-gateway key from the MuleRun
+console and set it as `MULERUN_TOKEN`. Image/video/audio endpoints are
+unaffected (they use the studio-plane token).
+
+### `502 upstream HTTP 401`
+Upstream token expired or rejected. Re-login / rotate the token. The OAuth cache
+has an `expires_at`; cli2api skips expired tokens, but the simplest fix is
+`mulerun login` again.
+
+### `vendor_error: code 3005 / 3006 / ...`
+A real upstream error (the MiniMax/Seedance/Wan service itself failed). cli2api
+is working — it surfaces the structured upstream error to the client. Retry or
+switch models.
+
+### `404 unknown image model: dall-e-3`
+cli2api does **not** alias OpenAI names to MuleRun. Use real names
+(`gpt-image-2` / `wan2.6-t2i` / `midjourney`). Run
+`curl localhost:8080/v1/models | jq '.data[].id'` for the full list.
+
+### Video / music job stuck at `queued`
+Check `CLI2API_JOB_RETENTION` and `CLI2API_JOB_HARD_CAP_MULT`: too-short
+retention + small multiplier means the reaper deletes the job before polling
+finishes. Defaults (7d / 3×) are fine; only shrink them for short-lived tests.
+
+### Job ID gone after restart
+The in-memory store is lost on restart. Use `CLI2API_JOBSTORE_DSN=file:...` or
+a remote libsql to persist.
+
+### `request body too large` (400)
+Per-request cap is 64 MB. This is chi's `RequestSize` middleware, wrapped as an
+OpenAI-style 400.
+
+### SSE streaming shows no increments
+Your reverse proxy didn't disable `proxy_buffering` — nginx / Caddy each need it
+configured. Also confirm your client uses `stream=True`, not `json()`.
+
+## FAQ
+
+### Why a proxy instead of calling MuleRun directly?
+`/v1/chat/completions` and `/v1/messages` are already compatible — call them
+directly if you want. But image/video/audio use a `/vendors/{vendor}/...` async
+job shape unlike OpenAI's. cli2api hides that so existing SDK code runs unchanged.
+
+### Does it cache results?
+No. Every call is a fresh MuleRun task. Cache at the application or CDN layer.
+
+### Can it run in Lambda / Cloud Functions?
+Text and image sync endpoints, yes. Video/music are explicitly async — the
+client polls, instances can restart freely. Pair with a libsql persistent store.
+
+### Multi-tenancy?
+No built-in users/quota. `CLI2API_API_KEYS` is a flat allow-list. Put quota
+behind an API gateway.
+
+### How well-reviewed is this code?
+The project went through 6 rounds of reviewer/reviewee iteration (codex ×3 + cc
+×2 + live e2e), fixing 26 real bugs — credential leaks, async jobs stuck
+forever, the reaper deleting live jobs, upstream schema nesting. 50+ unit tests,
+each bug carries a regression. See
+[DEVELOPMENT.md](https://github.com/yeagoo/MuleRunCLI2API/blob/master/DEVELOPMENT.md).

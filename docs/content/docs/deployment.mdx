@@ -1,0 +1,47 @@
+---
+title: Deployment
+description: Docker, persistent job store, reverse proxy.
+icon: Cloud
+---
+
+## Docker
+
+```sh
+docker compose up --build
+```
+
+Two credential styles in `docker-compose.yml`: `MULERUN_TOKEN` env var, or mount
+`~/.config/mulerun` + `~/.mulerun` into the container.
+
+## Persistent job store
+
+By default jobs live in memory and are lost on restart. For production, persist:
+
+```sh
+# Local libsql file (pure-Go driver, zero deps)
+CLI2API_JOBSTORE_DSN=file:/var/lib/cli2api/jobs.db ./cli2api
+
+# Remote Turso / sqld
+CLI2API_JOBSTORE_DSN="libsql://your-db.turso.io?authToken=$TURSO_TOKEN" ./cli2api
+```
+
+The DSN's auth portion is automatically redacted in startup logs, so it's safe
+to ship them to log aggregators.
+
+## Reverse proxy (nginx)
+
+Streaming endpoints need buffering off, or SSE and audio streams stall:
+
+```nginx
+location /v1/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_buffering off;          # SSE + audio streaming
+    proxy_read_timeout 600s;      # long polls / sync image up to 5 min
+    client_max_body_size 64M;     # multipart image edits
+}
+```
+
+## Vercel (docs site)
+
+This docs site lives in `docs/`. Deploy it by setting the Vercel project root to
+`docs/` — it's a standard Next.js app.

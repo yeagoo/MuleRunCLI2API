@@ -1,0 +1,84 @@
+---
+title: Text
+description: Chat completions, messages, and the responses API — transparent proxies.
+icon: ChatCircle
+---
+
+All three text endpoints are **transparent proxies** to MuleRun's native
+OpenAI/Anthropic-compatible APIs, with SSE streaming preserved.
+
+<Callout type="warn">
+Text endpoints need an **LLM-gateway** token, not the studio OAuth token from
+`mulerun login`. See [Troubleshooting](/docs/troubleshooting) if you get
+`401 Invalid API Key format`.
+</Callout>
+
+## POST /v1/chat/completions
+
+```sh
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $CLI2API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}'
+```
+
+## POST /v1/responses
+
+Transparent proxy to MuleRun's `/vendors/openai/v1/responses` (the OpenAI Agents
+SDK entrypoint). Supports `"stream": true`; `"background": true` for async jobs.
+
+```sh
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer $CLI2API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-5","input":"Summarize Black-Scholes in one paragraph."}'
+```
+
+## POST /v1/messages
+
+Anthropic shape. Accepts `x-api-key` or `Authorization: Bearer`.
+
+```sh
+curl http://localhost:8080/v1/messages \
+  -H "x-api-key: $CLI2API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{"model":"claude-sonnet-4-6","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}'
+```
+
+## SDK usage
+
+<Tabs items={["OpenAI", "Anthropic", "Streaming"]}>
+
+```python tab="OpenAI"
+from openai import OpenAI
+c = OpenAI(api_key="local-key", base_url="http://localhost:8080/v1")
+
+r = c.chat.completions.create(
+    model="gpt-5",
+    messages=[{"role": "user", "content": "hi"}],
+)
+print(r.choices[0].message.content)
+```
+
+```python tab="Anthropic"
+from anthropic import Anthropic
+a = Anthropic(api_key="local-key", base_url="http://localhost:8080")
+
+r = a.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=256,
+    messages=[{"role": "user", "content": "hi"}],
+)
+print(r.content[0].text)
+```
+
+```python tab="Streaming"
+for chunk in c.chat.completions.create(
+    model="gpt-5",
+    messages=[{"role": "user", "content": "tell me a joke"}],
+    stream=True,
+):
+    print(chunk.choices[0].delta.content or "", end="")
+```
+
+</Tabs>
