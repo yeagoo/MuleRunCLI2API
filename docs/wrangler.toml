@@ -1,0 +1,14 @@
+#:schema node_modules/wrangler/config-schema.json
+# Cloudflare Pages config for the static-exported docs site.
+#
+# Deploy from this directory:
+#   pnpm install && pnpm build        # produces ./out
+#   npx wrangler pages deploy out      # or: pnpm dlx wrangler pages deploy out
+#
+# Or connect the GitHub repo in the Cloudflare dashboard with:
+#   Root directory:     docs
+#   Build command:      pnpm install && pnpm build
+#   Build output dir:   out
+name = "cli2api-docs"
+pages_build_output_dir = "out"
+compatibility_date = "2025-06-01"

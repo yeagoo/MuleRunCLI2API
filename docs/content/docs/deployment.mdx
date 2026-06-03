@@ -41,7 +41,26 @@ location /v1/ {
 }
 ```
 
-## Vercel (docs site)
+## Docs site (this site)
 
-This docs site lives in `docs/`. Deploy it by setting the Vercel project root to
-`docs/` — it's a standard Next.js app.
+This documentation site lives in `docs/` and is a **statically exported**
+Next.js app (`output: 'export'`) — it builds to a plain `out/` folder with no
+server runtime.
+
+**Cloudflare Pages** (recommended — free, global CDN):
+
+```sh
+cd docs
+pnpm install && pnpm build      # → ./out
+npx wrangler pages deploy out
+```
+
+Or connect the GitHub repo in the Cloudflare dashboard with root directory
+`docs`, build command `pnpm install && pnpm build`, output directory `out`.
+
+Locale routing on the static host is handled by `public/_redirects`
+(`/` → `/en/`); `/en/*` and `/cn/*` are prerendered. Search is client-side
+(Orama index baked into `out/api/search`, mandarin tokenizer for Chinese), so
+no server is involved.
+
+**Vercel / Netlify / any static host** also work — point them at `docs/out/`.

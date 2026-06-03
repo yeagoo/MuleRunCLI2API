@@ -2,11 +2,15 @@ import { source } from '@/lib/source';
 import { createFromSource } from 'fumadocs-core/search/server';
 import { createTokenizer } from '@orama/tokenizers/mandarin';
 
-export const { GET } = createFromSource(source, {
+// Static export: the search index is built at compile time and served as a
+// static JSON file; the actual querying happens client-side (see
+// components/search.tsx). `staticGET` + revalidate:false makes the route a
+// fully static asset.
+export const revalidate = false;
+
+export const { staticGET: GET } = createFromSource(source, {
   localeMap: {
-    // English uses the default Orama tokenizer.
     en: { language: 'english' },
-    // Chinese needs the mandarin tokenizer for word segmentation.
     cn: {
       components: {
         tokenizer: createTokenizer(),

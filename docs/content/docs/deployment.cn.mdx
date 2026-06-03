@@ -40,7 +40,24 @@ location /v1/ {
 }
 ```
 
-## Vercel（文档站）
+## 文档站（本站）
 
-本文档站位于 `docs/`。部署时把 Vercel 项目 root 指到 `docs/` 即可——它是标准的
-Next.js 应用。
+本文档站位于 `docs/`，是**静态导出**的 Next.js 应用（`output: 'export'`）——
+构建产物是纯静态的 `out/` 文件夹，无需服务端运行时。
+
+**Cloudflare Pages**（推荐——免费、全球 CDN）：
+
+```sh
+cd docs
+pnpm install && pnpm build      # → ./out
+npx wrangler pages deploy out
+```
+
+或在 Cloudflare 控制台连接 GitHub 仓库，root directory 设 `docs`，build command
+设 `pnpm install && pnpm build`，output directory 设 `out`。
+
+静态托管下的语言路由由 `public/_redirects` 处理（`/` → `/en/`）；`/en/*` 和
+`/cn/*` 已预渲染。搜索是客户端的（Orama 索引烤进 `out/api/search`，中文用
+mandarin 分词），不依赖服务端。
+
+**Vercel / Netlify / 任意静态托管** 也行——指向 `docs/out/` 即可。

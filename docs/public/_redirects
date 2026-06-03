@@ -1,0 +1,5 @@
+# Cloudflare Pages redirects. Static export has no i18n middleware, so the
+# bare root and unlocalized doc paths get a fixed redirect to the default
+# language. Direct /en/* and /cn/* paths are prerendered and served as-is.
+/            /en/            302
+/docs/*      /en/docs/:splat 302
