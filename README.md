@@ -54,7 +54,7 @@ chmod +x cli2api
 ./cli2api
 ```
 
-平台资产命名：`cli2api-<version>-{linux,darwin}-{amd64,arm64}`，每个附带 `.sha256`，整体有 `SHA256SUMS.txt`，可 `sha256sum -c` 校验。
+平台资产每平台两个名字：稳定名 `cli2api-{linux,darwin}-{amd64,arm64}`（`latest/download/...` 指向它）和带版本号的 `cli2api-<version>-...`（存档用）。每个附带 `.sha256`，整体有 `SHA256SUMS.txt`，可 `sha256sum -c` 校验。
 
 **方式 B — 从源码构建**（需要 Go ≥1.25）：
 

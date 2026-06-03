@@ -18,8 +18,9 @@ chmod +x cli2api
 ./cli2api --version
 ```
 
-资产命名：`cli2api-<version>-{linux,darwin}-{amd64,arm64}`。每个附带 `.sha256`，
-整体有 `SHA256SUMS.txt`：
+每个 release 每平台发两个名字：带版本号的（`cli2api-<version>-{linux,darwin}-{amd64,arm64}`，
+如 `cli2api-v0.1.0-linux-amd64`）用于存档，和稳定名（`cli2api-{linux,darwin}-{amd64,arm64}`）——
+上面的 `latest/download/...` URL 始终指向后者。每个附带 `.sha256`，整体有 `SHA256SUMS.txt`：
 
 ```sh
 sha256sum -c SHA256SUMS.txt

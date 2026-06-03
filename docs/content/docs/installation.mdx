@@ -18,8 +18,12 @@ chmod +x cli2api
 ./cli2api --version
 ```
 
-Asset naming: `cli2api-<version>-{linux,darwin}-{amd64,arm64}`. Each has a
-`.sha256` sidecar, plus an aggregate `SHA256SUMS.txt`:
+Each release publishes two names per platform: a versioned one
+(`cli2api-<version>-{linux,darwin}-{amd64,arm64}`, e.g.
+`cli2api-v0.1.0-linux-amd64`) for archival, and a stable one
+(`cli2api-{linux,darwin}-{amd64,arm64}`) that the `latest/download/...` URL
+above always resolves to. Each has a `.sha256` sidecar, plus an aggregate
+`SHA256SUMS.txt`:
 
 ```sh
 sha256sum -c SHA256SUMS.txt

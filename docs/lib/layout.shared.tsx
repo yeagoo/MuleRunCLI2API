@@ -1,13 +1,13 @@
 import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
 import { uiTranslations } from 'fumadocs-ui/i18n';
-import { zhTW } from '@fumadocs/language/zh-tw';
+import { zhCN } from '@fumadocs/language/zh-cn';
 import { i18n } from '@/lib/i18n';
 import { appName, githubUrl } from '@/lib/shared';
 
 export const translations = i18n
   .translations()
   .extend(uiTranslations())
-  .preset('cn', zhTW())
+  .preset('cn', zhCN())
   .add('ui', {
     cn: {
       displayName: '简体中文',

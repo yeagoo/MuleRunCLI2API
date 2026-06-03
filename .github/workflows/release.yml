@@ -47,9 +47,14 @@ jobs:
           go build -trimpath \
             -ldflags "-s -w -X main.version=${VERSION}" \
             -o "${OUT}" ./cmd/cli2api
-          # sha256 sidecar for integrity verification
+          # Unversioned copy so `latest/download/cli2api-<os>-<arch>` resolves
+          # to a stable URL (what the docs/quickstart point at).
+          STABLE="cli2api-${GOOS}-${GOARCH}"
+          cp "${OUT}" "${STABLE}"
+          # sha256 sidecars for integrity verification
           sha256sum "${OUT}" > "${OUT}.sha256"
-          ls -la "${OUT}"*
+          sha256sum "${STABLE}" > "${STABLE}.sha256"
+          ls -la cli2api-*
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -58,6 +63,8 @@ jobs:
           path: |
             cli2api-*-${{ matrix.goos }}-${{ matrix.goarch }}
             cli2api-*-${{ matrix.goos }}-${{ matrix.goarch }}.sha256
+            cli2api-${{ matrix.goos }}-${{ matrix.goarch }}
+            cli2api-${{ matrix.goos }}-${{ matrix.goarch }}.sha256
           retention-days: 7
           if-no-files-found: error
 
@@ -75,7 +82,9 @@ jobs:
       - name: Aggregate checksums
         run: |
           cd dist
-          cat *.sha256 > SHA256SUMS.txt
+          # Only the versioned binaries go in SHA256SUMS (stable copies are
+          # byte-identical duplicates); keep their own .sha256 sidecars too.
+          cat cli2api-*-*-*.sha256 > SHA256SUMS.txt
           echo "=== release assets ==="
           ls -la
 
@@ -87,6 +96,11 @@ jobs:
             dist/cli2api-*-linux-arm64
             dist/cli2api-*-darwin-amd64
             dist/cli2api-*-darwin-arm64
+            dist/cli2api-linux-amd64
+            dist/cli2api-linux-arm64
+            dist/cli2api-darwin-amd64
+            dist/cli2api-darwin-arm64
+            dist/cli2api-*.sha256
             dist/SHA256SUMS.txt
           generate_release_notes: true
           body: |
