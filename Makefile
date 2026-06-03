@@ -2,8 +2,9 @@ BINARY := cli2api
 PKG    := ./cmd/cli2api
 OUT    := bin/$(BINARY)
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 GOFLAGS := -trimpath
-LDFLAGS := -s -w
+LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: build run test vet fmt clean docker docker-run test-e2e test-e2e-live test-e2e-live-cheap
 

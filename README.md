@@ -42,11 +42,27 @@ mulerun login        # 浏览器 OAuth；token 自动存到 ~/.config/mulerun/
 
 ### 2. 构建并启动 cli2api
 
+**方式 A — 下载预编译二进制**（最快，无需 Go 工具链）：
+
 ```sh
-git clone <this-repo> cli2api && cd cli2api
-make build
+# 在 Releases 页选对应平台，例如 Linux x86-64：
+curl -sSL -o cli2api \
+  https://github.com/yeagoo/MuleRunCLI2API/releases/latest/download/cli2api-linux-amd64
+chmod +x cli2api
+./cli2api
+```
+
+平台资产命名：`cli2api-<version>-{linux,darwin}-{amd64,arm64}`，每个附带 `.sha256`，整体有 `SHA256SUMS.txt`，可 `sha256sum -c` 校验。
+
+**方式 B — 从源码构建**（需要 Go ≥1.25）：
+
+```sh
+git clone https://github.com/yeagoo/MuleRunCLI2API cli2api && cd cli2api
+make build       # 版本号自动从 git tag 注入
 ./bin/cli2api
 ```
+
+`./cli2api --version` 任何时候打印版本号。
 
 启动后你会看到：
 

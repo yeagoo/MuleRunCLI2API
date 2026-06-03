@@ -1,0 +1,112 @@
+name: release
+
+# Builds static, CGO-free binaries for linux/darwin × amd64/arm64 and
+# publishes them on a GitHub Release whenever a v* tag is pushed.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # needed to create the Release and upload assets
+
+jobs:
+  build:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Run tests
+        run: go test ./... -count=1
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          OUT="cli2api-${VERSION}-${GOOS}-${GOARCH}"
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${VERSION}" \
+            -o "${OUT}" ./cmd/cli2api
+          # sha256 sidecar for integrity verification
+          sha256sum "${OUT}" > "${OUT}.sha256"
+          ls -la "${OUT}"*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli2api-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            cli2api-*-${{ matrix.goos }}-${{ matrix.goarch }}
+            cli2api-*-${{ matrix.goos }}-${{ matrix.goarch }}.sha256
+          retention-days: 7
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Aggregate checksums
+        run: |
+          cd dist
+          cat *.sha256 > SHA256SUMS.txt
+          echo "=== release assets ==="
+          ls -la
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/cli2api-*-linux-amd64
+            dist/cli2api-*-linux-arm64
+            dist/cli2api-*-darwin-amd64
+            dist/cli2api-*-darwin-arm64
+            dist/SHA256SUMS.txt
+          generate_release_notes: true
+          body: |
+            Pre-compiled static binaries for cli2api `${{ github.ref_name }}`.
+
+            CGO-free, single-file — download, `chmod +x`, run.
+
+            | Platform | Asset |
+            |----------|-------|
+            | Linux x86-64 | `cli2api-${{ github.ref_name }}-linux-amd64` |
+            | Linux ARM64  | `cli2api-${{ github.ref_name }}-linux-arm64` |
+            | macOS Intel  | `cli2api-${{ github.ref_name }}-darwin-amd64` |
+            | macOS Apple Silicon | `cli2api-${{ github.ref_name }}-darwin-arm64` |
+
+            Verify with `sha256sum -c SHA256SUMS.txt`.
+
+            ```sh
+            # example (Linux x86-64)
+            curl -sSL -o cli2api \
+              https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cli2api-${{ github.ref_name }}-linux-amd64
+            chmod +x cli2api
+            MULERUN_TOKEN=mr_xxx ./cli2api
+            ```

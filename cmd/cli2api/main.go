@@ -18,7 +18,20 @@ import (
 	"github.com/openmule/cli2api/internal/server"
 )
 
+// version is the build version, injected at link time via
+//   -ldflags "-X main.version=v1.2.3"
+// Defaults to "dev" for local `go build` / `make build`.
+var version = "dev"
+
 func main() {
+	// --version / -v: print and exit before any config/credential work.
+	for _, a := range os.Args[1:] {
+		if a == "--version" || a == "-v" || a == "version" {
+			println("cli2api " + version)
+			return
+		}
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		// Bootstrap logger only — full logger needs cfg.LogLevel.
@@ -40,6 +53,7 @@ func main() {
 	jobstore.StartReaper(ctx, store, cfg.ReaperInterval, cfg.JobRetention, cfg.JobHardCapMult, log)
 
 	log.Info("startup",
+		"version", version,
 		"addr", ":"+cfg.Port,
 		"upstream", cfg.MulerunBaseURL,
 		"token_source", cfg.TokenSource,
