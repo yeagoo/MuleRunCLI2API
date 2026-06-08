@@ -15,7 +15,7 @@ icon: ChatCircle
 ## POST /v1/chat/completions
 
 ```sh
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:51222/v1/chat/completions \
   -H "Authorization: Bearer $CLI2API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}'
@@ -27,7 +27,7 @@ curl http://localhost:8080/v1/chat/completions \
 支持 `"stream": true`；`"background": true` 走异步 job。
 
 ```sh
-curl http://localhost:8080/v1/responses \
+curl http://localhost:51222/v1/responses \
   -H "Authorization: Bearer $CLI2API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-5","input":"用一段话解释 Black-Scholes 公式。"}'
@@ -38,7 +38,7 @@ curl http://localhost:8080/v1/responses \
 Anthropic 形态。接受 `x-api-key` 或 `Authorization: Bearer`。
 
 ```sh
-curl http://localhost:8080/v1/messages \
+curl http://localhost:51222/v1/messages \
   -H "x-api-key: $CLI2API_KEY" \
   -H "anthropic-version: 2023-06-01" \
   -d '{"model":"claude-sonnet-4-6","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}'
@@ -50,7 +50,7 @@ curl http://localhost:8080/v1/messages \
 
 ```python tab="OpenAI"
 from openai import OpenAI
-c = OpenAI(api_key="local-key", base_url="http://localhost:8080/v1")
+c = OpenAI(api_key="local-key", base_url="http://localhost:51222/v1")
 
 r = c.chat.completions.create(
     model="gpt-5",
@@ -61,7 +61,7 @@ print(r.choices[0].message.content)
 
 ```python tab="Anthropic"
 from anthropic import Anthropic
-a = Anthropic(api_key="local-key", base_url="http://localhost:8080")
+a = Anthropic(api_key="local-key", base_url="http://localhost:51222")
 
 r = a.messages.create(
     model="claude-sonnet-4-6",

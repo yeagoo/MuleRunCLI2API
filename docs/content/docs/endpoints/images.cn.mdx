@@ -10,7 +10,7 @@ icon: Image
 `{ data: [{ url }] }` 形态。
 
 ```sh
-curl http://localhost:8080/v1/images/generations \
+curl http://localhost:51222/v1/images/generations \
   -H "Authorization: Bearer $CLI2API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"wan2.6-t2i","prompt":"a synthwave fox","size":"1024x1024","n":1}'
@@ -21,7 +21,7 @@ curl http://localhost:8080/v1/images/generations \
 
 ```python
 from openai import OpenAI
-c = OpenAI(api_key="local-key", base_url="http://localhost:8080/v1")
+c = OpenAI(api_key="local-key", base_url="http://localhost:51222/v1")
 
 r = c.images.generate(model="gpt-image-2", prompt="a vector fox logo", size="1024x1024")
 print(r.data[0].url)
@@ -35,13 +35,13 @@ print(r.data[0].url)
 <Tabs items={["JSON", "multipart"]}>
 
 ```sh tab="JSON"
-curl http://localhost:8080/v1/images/edits \
+curl http://localhost:51222/v1/images/edits \
   -H "Authorization: Bearer $CLI2API_KEY" -H "Content-Type: application/json" \
   -d '{"model":"nano-banana-edit","prompt":"add sunglasses","images":["https://input/portrait.png"]}'
 ```
 
 ```sh tab="multipart"
-curl http://localhost:8080/v1/images/edits \
+curl http://localhost:51222/v1/images/edits \
   -F "model=gpt-image-2-edit" -F "image=@photo.png" \
   -F "prompt=oil painting" -F "size=1024x1024"
 ```

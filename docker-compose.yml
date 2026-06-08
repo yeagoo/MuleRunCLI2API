@@ -3,7 +3,7 @@ services:
     build: .
     image: cli2api:dev
     ports:
-      - "8080:8080"
+      - "51222:51222"
     environment:
       # Option A — inject the token directly:
       MULERUN_TOKEN: "${MULERUN_TOKEN}"

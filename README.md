@@ -69,7 +69,7 @@ make build       # 版本号自动从 git tag 注入
 启动后你会看到：
 
 ```json
-{"level":"INFO","msg":"startup","addr":":8080","registered_models":61,
+{"level":"INFO","msg":"startup","addr":":51222","registered_models":61,
  "jobstore":"memory","auth_required":false,
  "token_source":"file:/home/you/.config/mulerun/oauth_cache.json"}
 ```
@@ -79,7 +79,7 @@ make build       # 版本号自动从 git tag 注入
 ### 3. 第一次调用
 
 ```sh
-curl http://localhost:8080/v1/images/generations \
+curl http://localhost:51222/v1/images/generations \
   -H "Content-Type: application/json" \
   -d '{"model":"wan2.6-t2i","prompt":"a synthwave fox","size":"1024x1024"}'
 # → {"created":1733...,"data":[{"url":"https://cdn.mulerun.com/..."}]}
@@ -105,7 +105,7 @@ CLI2API_API_KEYS=sk-team1,sk-team2 ./bin/cli2api
 
 ```python
 from openai import OpenAI
-c = OpenAI(api_key="local-key", base_url="http://localhost:8080/v1")
+c = OpenAI(api_key="local-key", base_url="http://localhost:51222/v1")
 
 r = c.images.generate(
     model="wan2.6-t2i",         # 或 "gpt-image-2", "nano-banana", "midjourney"
@@ -137,7 +137,7 @@ with open("photo.png", "rb") as f:
 ```python
 import time, httpx
 
-base = "http://localhost:8080"
+base = "http://localhost:51222"
 
 # 提交
 job = httpx.post(f"{base}/v1/videos", json={
@@ -177,7 +177,7 @@ audio.stream_to_file("hello.mp3")
 
 ```python
 from anthropic import Anthropic
-a = Anthropic(api_key="local-key", base_url="http://localhost:8080")
+a = Anthropic(api_key="local-key", base_url="http://localhost:51222")
 
 r = a.messages.create(
     model="claude-sonnet-4-6",
@@ -280,7 +280,7 @@ reaper 后台 goroutine 每 `CLI2API_REAPER_INTERVAL`（默认 1h）扫一次，
 
 ```nginx
 location /v1/ {
-    proxy_pass http://127.0.0.1:8080;
+    proxy_pass http://127.0.0.1:51222;
     proxy_buffering off;          # SSE + audio streaming
     proxy_read_timeout 600s;      # 长轮询 / 同步图像最长 5 min
     client_max_body_size 64M;     # multipart 图像编辑用
@@ -293,7 +293,7 @@ location /v1/ {
 
 | 环境变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `CLI2API_PORT` | `8080` | HTTP 监听端口 |
+| `CLI2API_PORT` | `51222` | HTTP 监听端口 |
 | `CLI2API_API_KEYS` | *(空)* | 入站 API key 白名单（逗号分隔）；空 = 不鉴权 |
 | `CLI2API_JOBSTORE_DSN` | *(空 = 内存)* | libsql DSN（`file:...` / `libsql://...?authToken=...`） |
 | `CLI2API_JOB_RETENTION` | `168h` | job 行保留时长；`0s` = 不过期（reaper 整体跳过 sweep） |
@@ -332,7 +332,7 @@ location /v1/ {
 
 **`404 unknown image model: dall-e-3`**
 - cli2api **不做** OpenAI 模型名到 mulerun 的别名映射。请用 mulerun 真名（`gpt-image-2` / `wan2.6-t2i` / `midjourney`）
-- `curl localhost:8080/v1/models | jq '.data[].id'` 看完整列表
+- `curl localhost:51222/v1/models | jq '.data[].id'` 看完整列表
 
 **图像生成卡在那里很久才返回**
 - 同步包装内部在轮询 mulerun，最长等 `CLI2API_IMAGE_TIMEOUT`（默 5min）

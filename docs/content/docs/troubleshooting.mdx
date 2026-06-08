@@ -53,7 +53,7 @@ switch models.
 ### `404 unknown image model: dall-e-3`
 cli2api does **not** alias OpenAI names to MuleRun. Use real names
 (`gpt-image-2` / `wan2.6-t2i` / `midjourney`). Run
-`curl localhost:8080/v1/models | jq '.data[].id'` for the full list.
+`curl localhost:51222/v1/models | jq '.data[].id'` for the full list.
 
 ### Video / music job stuck at `queued`
 Check `CLI2API_JOB_RETENTION` and `CLI2API_JOB_HARD_CAP_MULT`: too-short

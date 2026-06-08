@@ -34,7 +34,7 @@ Streaming endpoints need buffering off, or SSE and audio streams stall:
 
 ```nginx
 location /v1/ {
-    proxy_pass http://127.0.0.1:8080;
+    proxy_pass http://127.0.0.1:51222;
     proxy_buffering off;          # SSE + audio streaming
     proxy_read_timeout 600s;      # long polls / sync image up to 5 min
     client_max_body_size 64M;     # multipart image edits

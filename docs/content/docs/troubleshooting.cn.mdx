@@ -48,7 +48,7 @@ LLM gateway key；`muk-` studio key 只覆盖图像/视频/音频。
 
 ### `404 unknown image model: dall-e-3`
 cli2api **不**把 OpenAI 名映射到 MuleRun。请用真名（`gpt-image-2` / `wan2.6-t2i`
-/ `midjourney`）。跑 `curl localhost:8080/v1/models | jq '.data[].id'` 看完整列表。
+/ `midjourney`）。跑 `curl localhost:51222/v1/models | jq '.data[].id'` 看完整列表。
 
 ### 视频 / 音乐 job 卡在 `queued`
 检查 `CLI2API_JOB_RETENTION` 和 `CLI2API_JOB_HARD_CAP_MULT`：retention 太短 +

@@ -30,7 +30,7 @@ type Config struct {
 }
 
 const (
-	defaultPort            = "8080"
+	defaultPort            = "51222"
 	defaultBaseURL         = "https://api.mulerun.com"
 	defaultImageTimeout    = 5 * time.Minute
 	defaultPollInterval    = 2 * time.Second

@@ -42,7 +42,7 @@ make build     # 版本号自动从 git tag 注入
 启动后你会看到：
 
 ```json
-{"level":"INFO","msg":"startup","version":"v0.1.0","addr":":8080",
+{"level":"INFO","msg":"startup","version":"v0.1.0","addr":":51222",
  "registered_models":61,"jobstore":"memory","auth_required":false,
  "token_source":"file:/home/you/.config/mulerun/oauth_cache.json"}
 ```
@@ -53,7 +53,7 @@ make build     # 版本号自动从 git tag 注入
 ## 3. 第一次调用
 
 ```sh
-curl http://localhost:8080/v1/images/generations \
+curl http://localhost:51222/v1/images/generations \
   -H "Content-Type: application/json" \
   -d '{"model":"wan2.6-t2i","prompt":"a synthwave fox","size":"1024x1024"}'
 # → {"created":1733...,"data":[{"url":"https://cdn.mulerun.com/..."}]}

@@ -11,7 +11,7 @@ icon: MusicNotes
 
 ```python
 from openai import OpenAI
-c = OpenAI(api_key="local-key", base_url="http://localhost:8080/v1")
+c = OpenAI(api_key="local-key", base_url="http://localhost:51222/v1")
 
 audio = c.audio.speech.create(
     model="speech-2.8-hd",
@@ -32,7 +32,7 @@ audio.stream_to_file("hello.mp3")
 
 ```python
 import time, httpx
-base = "http://localhost:8080"
+base = "http://localhost:51222"
 
 job = httpx.post(f"{base}/v1/audio/music", json={
     "model": "music-2.5",

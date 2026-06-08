@@ -9,7 +9,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o /out/cli2api ./cmd/cli2
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/cli2api /usr/local/bin/cli2api
-ENV CLI2API_PORT=8080
-EXPOSE 8080
+ENV CLI2API_PORT=51222
+EXPOSE 51222
 USER nonroot
 ENTRYPOINT ["/usr/local/bin/cli2api"]

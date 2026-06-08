@@ -17,7 +17,7 @@ studio key that powers image/video/audio. With a studio `muk-` key you'll get
 ## POST /v1/chat/completions
 
 ```sh
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:51222/v1/chat/completions \
   -H "Authorization: Bearer $CLI2API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}'
@@ -29,7 +29,7 @@ Transparent proxy to MuleRun's `/vendors/openai/v1/responses` (the OpenAI Agents
 SDK entrypoint). Supports `"stream": true`; `"background": true` for async jobs.
 
 ```sh
-curl http://localhost:8080/v1/responses \
+curl http://localhost:51222/v1/responses \
   -H "Authorization: Bearer $CLI2API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-5","input":"Summarize Black-Scholes in one paragraph."}'
@@ -40,7 +40,7 @@ curl http://localhost:8080/v1/responses \
 Anthropic shape. Accepts `x-api-key` or `Authorization: Bearer`.
 
 ```sh
-curl http://localhost:8080/v1/messages \
+curl http://localhost:51222/v1/messages \
   -H "x-api-key: $CLI2API_KEY" \
   -H "anthropic-version: 2023-06-01" \
   -d '{"model":"claude-sonnet-4-6","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}'
@@ -52,7 +52,7 @@ curl http://localhost:8080/v1/messages \
 
 ```python tab="OpenAI"
 from openai import OpenAI
-c = OpenAI(api_key="local-key", base_url="http://localhost:8080/v1")
+c = OpenAI(api_key="local-key", base_url="http://localhost:51222/v1")
 
 r = c.chat.completions.create(
     model="gpt-5",
@@ -63,7 +63,7 @@ print(r.choices[0].message.content)
 
 ```python tab="Anthropic"
 from anthropic import Anthropic
-a = Anthropic(api_key="local-key", base_url="http://localhost:8080")
+a = Anthropic(api_key="local-key", base_url="http://localhost:51222")
 
 r = a.messages.create(
     model="claude-sonnet-4-6",
