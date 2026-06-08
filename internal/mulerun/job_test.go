@@ -217,3 +217,55 @@ func TestSubmitAndWait_4xxBreaksLoop(t *testing.T) {
 		t.Fatalf("expected at most 2 polls before giving up, got %d", got)
 	}
 }
+
+func TestSubmitAndWait_RetriesTransientPollErrors(t *testing.T) {
+	// A transient transport error (server closes connection mid-poll) must
+	// NOT fail the job — the loop should retry and pick up the completion.
+	const taskID = "task-flaky"
+	var polls int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/vendors/test/v1/foo/generation", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"task_info": map[string]any{"id": taskID, "status": "pending", "created_at": "x", "updated_at": "x"},
+		})
+	})
+	mux.HandleFunc("/vendors/test/v1/foo/generation/"+taskID, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&polls, 1)
+		switch n {
+		case 1:
+			// Simulate a dropped connection: hijack and close without writing.
+			hj, ok := w.(http.Hijacker)
+			if ok {
+				conn, _, _ := hj.Hijack()
+				conn.Close()
+				return
+			}
+			w.WriteHeader(http.StatusBadGateway) // fallback transient
+		case 2:
+			w.WriteHeader(http.StatusServiceUnavailable) // 503 transient
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"task_info": map[string]any{"id": taskID, "status": "completed", "created_at": "x", "updated_at": "x"},
+				"images":    []string{"https://example.test/ok.png"},
+			})
+		}
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(srv.URL, "test-token")
+	res, err := c.SubmitAndWait(context.Background(), "/vendors/test/v1/foo/generation",
+		map[string]string{"prompt": "x"}, 5*time.Second, 5*time.Millisecond, 30*time.Millisecond)
+	if err != nil {
+		t.Fatalf("expected success despite transient poll errors, got %v", err)
+	}
+	if res.Status != "completed" || len(res.Images) != 1 {
+		t.Fatalf("expected completed with 1 image, got %+v", res)
+	}
+	if got := atomic.LoadInt32(&polls); got < 3 {
+		t.Fatalf("expected ≥3 polls (2 transient + success), got %d", got)
+	}
+}

@@ -150,23 +150,44 @@ func (c *Client) SubmitAndWait(ctx context.Context, vendorPath string, body any,
 		return JobResult{}, err
 	}
 
+	// A poll error (transport EOF/reset, 5xx, 429, …) is transient: the
+	// upstream task keeps running, so retry on the next tick instead of
+	// failing the whole job. Only give up after several consecutive errors
+	// (upstream genuinely down) or when the deadline trips.
+	const maxConsecutivePollErrors = 6
+	var consecutiveErrs int
+	var lastErr error
+
 	wait := initial
 	for {
 		select {
 		case <-pollCtx.Done():
+			if lastErr != nil {
+				return JobResult{}, fmt.Errorf("%w (last poll error: %v)", ErrJobTimeout, lastErr)
+			}
 			return JobResult{}, ErrJobTimeout
 		case <-time.After(wait):
 		}
 
 		res, done, err := c.Poll(pollCtx, vendorPath, id)
 		if err != nil {
-			// If the loop's deadline tripped during the GET, surface our
-			// own ErrJobTimeout instead of the raw context error.
+			// The loop's own deadline tripping mid-GET is terminal.
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(pollCtx.Err(), context.DeadlineExceeded) {
 				return JobResult{}, ErrJobTimeout
 			}
-			return JobResult{}, err
+			// Otherwise transient: count it, bail only if they pile up.
+			consecutiveErrs++
+			lastErr = err
+			if consecutiveErrs >= maxConsecutivePollErrors {
+				return JobResult{}, fmt.Errorf("upstream unreachable after %d consecutive poll errors: %w", consecutiveErrs, err)
+			}
+			wait = time.Duration(float64(wait) * 1.5)
+			if wait > max {
+				wait = max
+			}
+			continue
 		}
+		consecutiveErrs = 0
 		if done {
 			return res, nil
 		}
