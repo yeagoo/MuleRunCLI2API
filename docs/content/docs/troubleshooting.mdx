@@ -4,22 +4,46 @@ description: Common errors and FAQ.
 icon: Wrench
 ---
 
+## Getting your `muk-` API key
+
+cli2api needs a **`muk-` API key** in `MULERUN_TOKEN` — a stable, long-lived,
+per-account key that the MuleRun API gateway accepts. The OAuth token from
+`mulerun login` is a **session JWT** and does **not** work (see below).
+
+The `mulerun` CLI exchanges your login for a `muk-` key internally on each
+`studio` call but doesn't print it directly. To capture yours:
+
+```sh
+# Wrap the bundled mulerouter to print the key the CLI hands it, run once,
+# then restore. (Advanced — there's no official "print key" command yet.)
+W=$(readlink -f ~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter)
+mv "$W" "$W.real"
+printf '#!/bin/bash\nenv | grep ^MULEROUTER_API_KEY= | cut -d= -f2\n' > "$W"
+chmod +x "$W"
+mulerun studio list >/dev/null 2>&1   # prints muk-... to stdout
+mv "$W.real" "$W"
+```
+
+Then `export MULERUN_TOKEN=muk-...`. The key is stable across runs, so you only
+need to do this once (store it in your `.env` / systemd unit).
+
 ## Common errors
 
 ### `no mulerun credentials found`
-Run `mulerun login`, or `export MULERUN_TOKEN=mr_xxx`. The startup log's
+Set `export MULERUN_TOKEN=muk-...` (see above). The startup log's
 `token_source` field shows which file/env it read.
 
-### `/v1/chat/completions` returns 401 `Invalid API Key format`
-The studio OAuth token can't call the text endpoints — MuleRun runs two
-independent auth systems. Get a separate LLM-gateway key from the MuleRun
-console and set it as `MULERUN_TOKEN`. Image/video/audio endpoints are
-unaffected (they use the studio-plane token).
+### `502 upstream HTTP 401` / `Invalid API Key format` on **any** endpoint
+You're using the OAuth JWT, not a `muk-` key. `mulerun login` caches a session
+JWT that the gateway rejects on **every** endpoint (image/video/audio AND
+chat). cli2api logs a startup warning when it detects a JWT. Fix: set
+`MULERUN_TOKEN` to your `muk-` key (see "Getting your muk- key" above).
 
-### `502 upstream HTTP 401`
-Upstream token expired or rejected. Re-login / rotate the token. The OAuth cache
-has an `expires_at`; cli2api skips expired tokens, but the simplest fix is
-`mulerun login` again.
+### `/v1/chat/completions` returns `Model 'gpt-5' is not supported`
+Auth passed, but the studio-plane `muk-` key doesn't expose chat models. Text
+endpoints (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`) need a
+separate LLM-gateway key from MuleRun; the `muk-` studio key covers
+image/video/audio only.
 
 ### `vendor_error: code 3005 / 3006 / ...`
 A real upstream error (the MiniMax/Seedance/Wan service itself failed). cli2api

@@ -20,13 +20,16 @@ import (
 //
 // In every file we accept any of `token`, `access_token`, `accessToken`.
 //
-// Caveat: the access_token from `mulerun login` is an OAuth/JWT token
-// scoped to the studio plane only. It will NOT authenticate against the
-// chat completions / messages endpoints, which expect a separate
-// "muk-" exchange-key issued by mulerun's API gateway. Set MULERUN_TOKEN
-// to that key for chat surfaces.
+// IMPORTANT: mulerun's API gateway (api.mulerun.com) authenticates with a
+// "muk-" API key, NOT the OAuth/JWT access_token that `mulerun login` caches.
+// The JWT is rejected with HTTP 401 "Invalid API Key format" on every
+// upstream endpoint (image/video/audio AND chat). The muk- key is a stable,
+// long-lived per-account key. Set MULERUN_TOKEN to it. We still read the
+// OAuth cache as a fallback so the server can *start*, but warnIfJWT() flags
+// that upstream calls will 401 until a muk- key is provided.
 func DiscoverToken() (token string, source string, err error) {
 	if v := strings.TrimSpace(os.Getenv("MULERUN_TOKEN")); v != "" {
+		warnIfJWT(v, "env:MULERUN_TOKEN")
 		return v, "env:MULERUN_TOKEN", nil
 	}
 
@@ -56,11 +59,28 @@ func DiscoverToken() (token string, source string, err error) {
 			continue
 		}
 		if t != "" {
+			warnIfJWT(t, "file:"+path)
 			return t, "file:" + path, nil
 		}
 	}
 
 	return "", "", nil
+}
+
+// warnIfJWT logs a loud warning when the resolved token is a JWT (OAuth
+// session token) rather than a "muk-" API key. The mulerun gateway rejects
+// JWTs, so every upstream call would 401 — surfacing this at startup turns a
+// cryptic "502 upstream HTTP 401" into an actionable message.
+func warnIfJWT(tok, source string) {
+	if strings.HasPrefix(tok, "muk-") {
+		return // proper API key
+	}
+	if strings.HasPrefix(tok, "eyJ") { // base64url of `{"` — a JWT header
+		slog.Warn("credential looks like an OAuth JWT, not a muk- API key; "+
+			"upstream calls will fail with 401 'Invalid API Key format'. "+
+			"Set MULERUN_TOKEN to your muk- key (see docs: Troubleshooting).",
+			"source", source)
+	}
 }
 
 func readTokenFile(path string) (string, error) {

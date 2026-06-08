@@ -38,9 +38,9 @@ mulerun login        # 浏览器 OAuth；token 自动存到 ~/.config/mulerun/
                      # （mulerun-cli ≥0.1.0；旧版本是 ~/.mulerun/）
 ```
 
-或者直接拿到一个 token 后：`export MULERUN_TOKEN=mr_xxxxxxxxxxxxxxx`。
+**重要**：cli2api 认 **`muk-` API key**（绑账号的长期稳定 key）：`export MULERUN_TOKEN=muk-xxxxxxxx…`。
 
-> **关于 token 平面**：`mulerun login` 拿到的 OAuth token 走 **studio 平面**（图像/视频/音频）。如果你想用 `/v1/chat/completions`、`/v1/messages`、`/v1/responses` 这三个**文本端点**，需要单独的 LLM gateway key（mulerun 控制台另发）—— 这是 mulerun 自己的两套独立认证系统，不是 cli2api 的限制。详见下文「[排错](#排错)」。
+> `mulerun login` 缓存的是 **OAuth/JWT 会话 token**，API 网关用 `401 Invalid API Key format` 拒绝它——cli2api 仍能用它启动（启动日志会警告检测到 JWT），但所有上游调用都会 401，直到你给一个 `muk-` key。怎么拿 muk key 见下文「[排错](#排错)」。文本端点（chat/messages/responses）另需 MuleRun 的 LLM gateway key，跟 studio `muk-` key 不同。
 
 ### 2. 构建并启动 cli2api
 
@@ -74,7 +74,7 @@ make build       # 版本号自动从 git tag 注入
  "token_source":"file:/home/you/.config/mulerun/oauth_cache.json"}
 ```
 
-`token_source` 字段告诉你它从哪儿读到了凭证。如果是 `env:MULERUN_TOKEN` 你设过环境变量；`file:...` 说明它读了 OAuth cache。如果启动失败显示 `no mulerun credentials found` 就跑一次 `mulerun login` 或显式设环境变量。
+`token_source` 字段告诉你它从哪儿读到了凭证。如果 `file:...oauth_cache.json` 且日志带 "looks like an OAuth JWT" 警告——说明读到的是会话 JWT，上游会 401，需要改用 `muk-` key（见「排错」）。
 
 ### 3. 第一次调用
 
@@ -239,7 +239,7 @@ Description=cli2api
 After=network.target
 
 [Service]
-Environment=MULERUN_TOKEN=mr_xxxxx
+Environment=MULERUN_TOKEN=muk-xxxxxxxx
 Environment=CLI2API_API_KEYS=sk-prod-key-1
 Environment=CLI2API_JOBSTORE_DSN=file:/var/lib/cli2api/jobs.db
 ExecStart=/usr/local/bin/cli2api
@@ -313,7 +313,7 @@ location /v1/ {
 ## 排错
 
 **`no mulerun credentials found`**
-- 跑 `mulerun login`，或者 `export MULERUN_TOKEN=mr_xxx`
+- 跑 `mulerun login`，或者 `export MULERUN_TOKEN=muk-xxx`
 - 启动日志的 `token_source` 字段会告诉你它读到的是哪个文件 / 环境变量
 
 **`/v1/chat/completions` 返回 401 `Invalid API Key format`**

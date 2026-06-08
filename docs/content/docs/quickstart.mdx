@@ -4,22 +4,21 @@ description: Get cli2api running in 5 minutes.
 icon: Rocket
 ---
 
-## 1. Log in to MuleRun for upstream credentials
+## 1. Get a MuleRun API key
+
+cli2api authenticates to MuleRun's API gateway with a **`muk-` API key** — a
+stable, long-lived, per-account key. Set it via `MULERUN_TOKEN`:
 
 ```sh
-npm i -g @mulerunai/cli
-mulerun login   # browser OAuth; token cached at ~/.config/mulerun/
-                # (mulerun-cli >=0.1.0; older versions use ~/.mulerun/)
+export MULERUN_TOKEN=muk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-Or set a token directly: `export MULERUN_TOKEN=mr_xxxxxxxxxxxxxxx`.
-
-<Callout type="warn" title="Two token planes">
-The OAuth token from `mulerun login` works on the **studio plane** (image /
-video / audio). The **text endpoints** (`/v1/chat/completions`, `/v1/messages`,
-`/v1/responses`) need a separate LLM-gateway key issued by the MuleRun console —
-that's MuleRun's own two-system design, not a cli2api limitation. See
-[Troubleshooting](/en/docs/troubleshooting).
+<Callout type="warn" title="The mulerun login token is NOT enough">
+`mulerun login` caches an **OAuth/JWT session token** (`~/.config/mulerun/`),
+which the API gateway rejects with `401 Invalid API Key format`. cli2api will
+still *start* with it (so you can boot the server) but every upstream call
+fails until you provide a `muk-` key. The startup log warns when it detects a
+JWT. See [Troubleshooting → getting your muk- key](/en/docs/troubleshooting).
 </Callout>
 
 ## 2. Build and start

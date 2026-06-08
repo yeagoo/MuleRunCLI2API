@@ -4,21 +4,20 @@ description: 5 分钟跑起来 cli2api。
 icon: Rocket
 ---
 
-## 1. 登录 MuleRun 拿上游凭证
+## 1. 拿到 MuleRun API key
+
+cli2api 用 **`muk-` API key** 向 MuleRun API 网关认证——这是绑账号的长期稳定 key。
+通过 `MULERUN_TOKEN` 设置：
 
 ```sh
-npm i -g @mulerunai/cli
-mulerun login   # 浏览器 OAuth；token 自动存到 ~/.config/mulerun/
-                # （mulerun-cli >=0.1.0；旧版本是 ~/.mulerun/）
+export MULERUN_TOKEN=muk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-或者直接设 token：`export MULERUN_TOKEN=mr_xxxxxxxxxxxxxxx`。
-
-<Callout type="warn" title="两套 token 平面">
-`mulerun login` 拿到的 OAuth token 走 **studio 平面**（图像/视频/音频）。
-**文本端点**（`/v1/chat/completions`、`/v1/messages`、`/v1/responses`）需要单独的
-LLM gateway key（MuleRun 控制台另发）—— 这是 MuleRun 自己的两套独立认证系统，
-不是 cli2api 的限制。详见[排错](/cn/docs/troubleshooting)。
+<Callout type="warn" title="mulerun login 的 token 不够用">
+`mulerun login` 缓存的是 **OAuth/JWT 会话 token**（`~/.config/mulerun/`），
+API 网关会用 `401 Invalid API Key format` 拒绝它。cli2api 仍能用它**启动**
+（服务能起来），但所有上游调用都会失败，直到你给一个 `muk-` key。启动日志检测到
+JWT 时会警告。详见[排错 → 怎么拿 muk- key](/cn/docs/troubleshooting)。
 </Callout>
 
 ## 2. 构建并启动

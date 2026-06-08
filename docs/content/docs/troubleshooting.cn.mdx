@@ -4,20 +4,43 @@ description: 常见错误与 FAQ。
 icon: Wrench
 ---
 
+## 怎么拿你的 `muk-` API key
+
+cli2api 需要在 `MULERUN_TOKEN` 里放一个 **`muk-` API key**——绑账号的长期稳定 key，
+MuleRun API 网关认这个。`mulerun login` 拿到的是**会话 JWT**，**不能用**（见下）。
+
+`mulerun` CLI 每次 `studio` 调用时内部把登录态换成 `muk-` key，但不直接打印。
+抓你自己的：
+
+```sh
+# 包一层 mulerouter 打印 CLI 传给它的 key，跑一次,再还原。
+# （进阶——目前没有官方的"打印 key"命令。）
+W=$(readlink -f ~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter)
+mv "$W" "$W.real"
+printf '#!/bin/bash\nenv | grep ^MULEROUTER_API_KEY= | cut -d= -f2\n' > "$W"
+chmod +x "$W"
+mulerun studio list >/dev/null 2>&1   # 打印 muk-... 到 stdout
+mv "$W.real" "$W"
+```
+
+然后 `export MULERUN_TOKEN=muk-...`。这个 key 跨次调用稳定，只需抓一次
+（存进 `.env` / systemd 单元）。
+
 ## 常见错误
 
 ### `no mulerun credentials found`
-跑 `mulerun login`，或 `export MULERUN_TOKEN=mr_xxx`。启动日志的 `token_source`
-字段显示读了哪个文件/环境变量。
+`export MULERUN_TOKEN=muk-...`（见上）。启动日志的 `token_source` 字段显示读了哪个
+文件/环境变量。
 
-### `/v1/chat/completions` 返回 401 `Invalid API Key format`
-studio OAuth token 不能调文本端点——MuleRun 有两套独立认证系统。从 MuleRun
-控制台拿单独的 LLM gateway key，赋给 `MULERUN_TOKEN`。图像/视频/音频端点不受影响
-（它们用 studio 平面 token）。
+### 任意端点 `502 upstream HTTP 401` / `Invalid API Key format`
+你用的是 OAuth JWT，不是 `muk-` key。`mulerun login` 缓存的会话 JWT 被网关在
+**所有**端点（图像/视频/音频和 chat）拒绝。cli2api 检测到 JWT 会在启动时警告。
+修复：把 `MULERUN_TOKEN` 设成你的 `muk-` key（见上面"怎么拿 muk- key"）。
 
-### `502 upstream HTTP 401`
-上游 token 过期或被拒。重新登录 / 换 token。OAuth cache 有 `expires_at`，cli2api
-会跳过过期 token，但最简单还是 `mulerun login` 一遍。
+### `/v1/chat/completions` 返回 `Model 'gpt-5' is not supported`
+认证通过了，但 studio 平面的 `muk-` key 不暴露 chat 模型。文本端点
+（`/v1/chat/completions`、`/v1/messages`、`/v1/responses`）需要 MuleRun 单独的
+LLM gateway key；`muk-` studio key 只覆盖图像/视频/音频。
 
 ### `vendor_error: code 3005 / 3006 / ...`
 这是真实的上游错误（MiniMax/Seedance/Wan 服务自身挂了）。cli2api 工作正常——它把

@@ -7,8 +7,9 @@ icon: ChatCircle
 三个文本端点都是 MuleRun 原生 OpenAI/Anthropic 兼容 API 的**透明代理**，保留 SSE 流式。
 
 <Callout type="warn">
-文本端点需要 **LLM gateway** token，不是 `mulerun login` 的 studio OAuth token。
-如果遇到 `401 Invalid API Key format`，见[排错](/cn/docs/troubleshooting)。
+文本端点需要 **LLM gateway** key，跟驱动图像/视频/音频的 `muk-` studio key 不是
+同一个。用 studio `muk-` key 会报 `Model '…' is not supported`；用原始 OAuth JWT
+会报 `401 Invalid API Key format`。详见[排错](/cn/docs/troubleshooting)。
 </Callout>
 
 ## POST /v1/chat/completions

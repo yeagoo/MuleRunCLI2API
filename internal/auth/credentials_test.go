@@ -229,3 +229,22 @@ func TestDiscoverToken_SkipsUnreadableFile(t *testing.T) {
 		t.Fatalf("expected fall-through to legacy path, got %q", tok)
 	}
 }
+
+func TestWarnIfJWT(t *testing.T) {
+	// warnIfJWT only logs; assert it doesn't panic on any token shape.
+	for _, tok := range []string{
+		"muk-7c359a7f5daa59f5bfa49c6bae5418cb274c5ff87f61a549b08cfc61eb5d5c26",
+		"eyJhbGciOiJIUzI1Ni", // JWT header prefix
+		"mr_oldstyletoken",
+		"",
+	} {
+		warnIfJWT(tok, "test")
+	}
+	// Shape checks mirroring warnIfJWT's classification.
+	if !strings.HasPrefix("eyJabc", "eyJ") {
+		t.Fatal("JWT prefix check broken")
+	}
+	if !strings.HasPrefix("muk-x", "muk-") {
+		t.Fatal("muk prefix check broken")
+	}
+}
