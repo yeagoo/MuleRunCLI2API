@@ -1,0 +1,201 @@
+---
+title: 生产部署指南
+description: 把 cli2api 跑成加固的常驻服务 —— systemd、慢模型、持久化、反向代理。
+icon: Cloud
+---
+
+把 cli2api 跑成真正的常驻服务的完整流程：独立用户、`muk-` key、systemd 开机自启、
+job 持久化、为 `gpt-image-2` 等慢模型调超时、TLS 反向代理、入站鉴权。
+
+默认值就是为生产调好的——监听 **`51222`**（避开拥挤的 `8080`），轮询时自动重试上游
+瞬态断连，给了数据库就持久化 job。
+
+## 1. 安装二进制
+
+```sh
+# 在最新 release 选你的平台。
+sudo curl -sSL -o /usr/local/bin/cli2api \
+  https://github.com/yeagoo/MuleRunCLI2API/releases/latest/download/cli2api-linux-amd64
+sudo chmod +x /usr/local/bin/cli2api
+cli2api --version    # cli2api v0.1.2
+```
+
+## 2. 拿到你的 `muk-` API key（一次性）
+
+cli2api 用 **`muk-` API key** 认证——绑账号、长期稳定。`mulerun login` 的 OAuth
+token **不能用**（网关返回 `401 Invalid API Key format`）。抓一次你的 key：
+
+```sh
+W=$(readlink -f ~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter)
+mv "$W" "$W.real"
+printf '#!/bin/bash\nenv | grep ^MULEROUTER_API_KEY= | cut -d= -f2\n' > "$W"
+chmod +x "$W"
+mulerun studio list >/dev/null 2>&1   # 打印 muk-...
+mv "$W.real" "$W"
+```
+
+存到只有 root 能读的地方——**别提交进 git**：
+
+```sh
+sudo install -d -m 750 /etc/cli2api
+printf 'MULERUN_TOKEN=muk-xxxxxxxx\n' | sudo tee /etc/cli2api/env >/dev/null
+sudo chmod 640 /etc/cli2api/env
+```
+
+## 3. 建独立用户 + 数据目录
+
+别用 root 跑网络服务。
+
+```sh
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin cli2api
+sudo install -d -o cli2api -g cli2api -m 750 /var/lib/cli2api
+sudo chown root:cli2api /etc/cli2api/env   # 服务用户组可读
+```
+
+## 4. 入站 API key（鉴权）
+
+cli2api **默认无鉴权**——localhost 用没问题，暴露出去就危险。生成一个或多个入站 key
+加进 env 文件：
+
+```sh
+echo "CLI2API_API_KEYS=$(openssl rand -hex 24)" | sudo tee -a /etc/cli2api/env
+```
+
+客户端之后发 `Authorization: Bearer <key>`（OpenAI）或 `x-api-key: <key>`
+（Anthropic）。多个 key 用逗号分隔。
+
+## 5. 持久化 job（libsql）
+
+视频/音乐 job 默认在内存里，重启就没了。指向 libsql 文件让 job ID 跨重启/部署存活：
+
+```sh
+echo "CLI2API_JOBSTORE_DSN=file:/var/lib/cli2api/jobs.db" | sudo tee -a /etc/cli2api/env
+```
+
+（或远端 Turso/sqld：`libsql://your-db.turso.io?authToken=...`，鉴权部分在日志里脱敏。）
+
+## 6. 为慢模型调超时（`gpt-image-2`、视频、音乐）
+
+有些模型慢。`gpt-image-2` 经常要 **2-7 分钟**，视频和音乐能跑好几分钟。cli2api 已经会
+在轮询时自动重试上游瞬态断连，但要确保超时给慢模型留足空间：
+
+```ini
+# 在 /etc/cli2api/env
+CLI2API_IMAGE_TIMEOUT=15m        # 同步图像/语音最长等待（默认 5m）
+CLI2API_POLL_INTERVAL=2s         # 上游轮询初始周期
+CLI2API_POLL_MAX_INTERVAL=15s    # 退避上限
+```
+
+<Callout type="warn" title="gpt-image-2 是同步且慢">
+`/v1/images/generations` 会一直阻塞到图出来。`gpt-image-2` 可能要好几分钟——你的
+HTTP 客户端**和**反向代理都得允许长读超时（见 §8）。客户端提前放弃的话上游 job
+还是会跑完，再调一次即可。对延迟敏感优先用 `wan2.6-t2i`（约 15 秒）。
+</Callout>
+
+Job 保留期（异步视频/音乐 store）：
+
+```ini
+CLI2API_JOB_RETENTION=168h       # 完成的 job 留 7 天（0 = 不过期）
+CLI2API_REAPER_INTERVAL=1h       # 清理扫描周期（0 = 禁用）
+```
+
+## 7. systemd 单元（开机自启）
+
+```sh
+sudo tee /etc/systemd/system/cli2api.service >/dev/null <<'EOF'
+[Unit]
+Description=cli2api — OpenAI/Anthropic-compatible MuleRun proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cli2api
+Group=cli2api
+EnvironmentFile=/etc/cli2api/env
+ExecStart=/usr/local/bin/cli2api
+Restart=on-failure
+RestartSec=3
+# 加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/cli2api
+StateDirectory=cli2api
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now cli2api
+```
+
+验证：
+
+```sh
+systemctl status cli2api --no-pager
+journalctl -u cli2api -f          # 跟踪日志
+
+curl -s localhost:51222/healthz   # -> ok
+curl -s localhost:51222/v1/images/generations \
+  -H "Authorization: Bearer $YOUR_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"wan2.6-t2i","prompt":"a test","size":"1024x1024"}'
+```
+
+启动日志会显示 `version`、`token_source`、`jobstore` 和端口。如果看到
+`looks like an OAuth JWT`——说明 `MULERUN_TOKEN` 类型不对，重做 §2。
+
+## 8. TLS 反向代理（nginx）
+
+终止 TLS 转发到 `127.0.0.1:51222`。**流式和慢模型需要关 buffering + 长读超时：**
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name api.example.com;
+    ssl_certificate     /etc/letsencrypt/live/api.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;
+
+    location /v1/ {
+        proxy_pass http://127.0.0.1:51222;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_buffering off;            # SSE + 音频流式
+        proxy_read_timeout 900s;        # gpt-image-2 / 视频 可能跑几分钟
+        client_max_body_size 64M;       # multipart 图像编辑
+    }
+
+    location = /healthz {
+        proxy_pass http://127.0.0.1:51222;
+        access_log off;
+    }
+}
+```
+
+Caddy 等价：`reverse_proxy 127.0.0.1:51222`，在 route 里加 `flush_interval -1`
+（关 buffering）。
+
+## 9. 更新 / 回滚
+
+```sh
+sudo curl -sSL -o /usr/local/bin/cli2api \
+  https://github.com/yeagoo/MuleRunCLI2API/releases/latest/download/cli2api-linux-amd64
+sudo chmod +x /usr/local/bin/cli2api
+sudo systemctl restart cli2api
+```
+
+想钉版本就下 `cli2api-v0.1.2-linux-amd64` 而不是 `latest` 稳定名。libsql 里的 job
+状态会跨重启存活。
+
+## 10. 运维 checklist
+
+- [ ] `MULERUN_TOKEN` 是 `muk-` key（启动无 JWT 警告）
+- [ ] 超出 localhost 可达就设 `CLI2API_API_KEYS`
+- [ ] `CLI2API_JOBSTORE_DSN` 指向文件/远端 db（job 跨重启存活）
+- [ ] 用 `gpt-image-2` 的话 `CLI2API_IMAGE_TIMEOUT` ≥ 15m
+- [ ] 反向代理：`proxy_buffering off` + `proxy_read_timeout 900s`
+- [ ] systemd `Restart=on-failure` + `enable`（崩溃和重启都能恢复）
+- [ ] 密钥放 `/etc/cli2api/env`（mode 640，组 `cli2api`），绝不进 git
+- [ ] 首次启动看一遍 `journalctl -u cli2api` 有无警告

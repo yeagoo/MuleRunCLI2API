@@ -1,0 +1,210 @@
+---
+title: Production Guide
+description: Run cli2api as a hardened, always-on service — systemd, slow models, persistence, reverse proxy.
+icon: Cloud
+---
+
+A complete walkthrough for running cli2api as a real, always-on service: a
+dedicated user, a `muk-` key, systemd auto-start, persistent jobs, tuning for
+slow models like `gpt-image-2`, a TLS reverse proxy, and inbound auth.
+
+The defaults are tuned for this — the server listens on **`51222`** (not the
+crowded `8080`), retries transient upstream blips, and persists jobs when you
+give it a database.
+
+## 1. Install the binary
+
+```sh
+# Pick your platform from the latest release.
+sudo curl -sSL -o /usr/local/bin/cli2api \
+  https://github.com/yeagoo/MuleRunCLI2API/releases/latest/download/cli2api-linux-amd64
+sudo chmod +x /usr/local/bin/cli2api
+cli2api --version    # cli2api v0.1.2
+```
+
+## 2. Get your `muk-` API key (once)
+
+cli2api authenticates with a **`muk-` API key** — stable and long-lived per
+account. The `mulerun login` OAuth token does **not** work (the gateway returns
+`401 Invalid API Key format`). Capture your key once:
+
+```sh
+W=$(readlink -f ~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter)
+mv "$W" "$W.real"
+printf '#!/bin/bash\nenv | grep ^MULEROUTER_API_KEY= | cut -d= -f2\n' > "$W"
+chmod +x "$W"
+mulerun studio list >/dev/null 2>&1   # prints muk-...
+mv "$W.real" "$W"
+```
+
+Store it where only root can read it — never commit it:
+
+```sh
+sudo install -d -m 750 /etc/cli2api
+printf 'MULERUN_TOKEN=muk-xxxxxxxx\n' | sudo tee /etc/cli2api/env >/dev/null
+sudo chmod 640 /etc/cli2api/env
+```
+
+## 3. Create a dedicated user + data dir
+
+Don't run network services as root.
+
+```sh
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin cli2api
+sudo install -d -o cli2api -g cli2api -m 750 /var/lib/cli2api
+sudo chown root:cli2api /etc/cli2api/env   # group-readable by the service
+```
+
+## 4. Inbound API keys (auth)
+
+cli2api has **no auth by default** — fine for localhost, dangerous if exposed.
+Generate one or more inbound keys and add them to the env file:
+
+```sh
+echo "CLI2API_API_KEYS=$(openssl rand -hex 24)" | sudo tee -a /etc/cli2api/env
+```
+
+Clients then send `Authorization: Bearer <key>` (OpenAI) or `x-api-key: <key>`
+(Anthropic). Multiple keys are comma-separated.
+
+## 5. Persist jobs (libsql)
+
+Video/music jobs live in memory by default and vanish on restart. Point the
+store at a libsql file so job IDs survive restarts and deploys:
+
+```sh
+echo "CLI2API_JOBSTORE_DSN=file:/var/lib/cli2api/jobs.db" | sudo tee -a /etc/cli2api/env
+```
+
+(Or a remote Turso/sqld: `libsql://your-db.turso.io?authToken=...`. The auth
+part is redacted in logs.)
+
+## 6. Tune for slow models (`gpt-image-2`, video, music)
+
+Some models are slow. `gpt-image-2` routinely takes **2–7 minutes**; video and
+music can run several minutes. cli2api already retries transient upstream
+disconnects during polling, but make sure the timeouts give slow models room:
+
+```ini
+# in /etc/cli2api/env
+CLI2API_IMAGE_TIMEOUT=15m        # sync image/speech max wait (default 5m)
+CLI2API_POLL_INTERVAL=2s         # initial upstream poll cadence
+CLI2API_POLL_MAX_INTERVAL=15s    # backoff ceiling
+```
+
+<Callout type="warn" title="gpt-image-2 is synchronous and slow">
+`/v1/images/generations` blocks until the image is ready. For `gpt-image-2`
+that can be minutes — your HTTP client **and** any reverse proxy must allow a
+long read timeout (see §8). If a client gives up early, the upstream job still
+finishes; just call again. Prefer `wan2.6-t2i` (~15 s) when latency matters.
+</Callout>
+
+Job retention (for the async video/music store):
+
+```ini
+CLI2API_JOB_RETENTION=168h       # keep finished jobs 7 days (0 = never expire)
+CLI2API_REAPER_INTERVAL=1h       # cleanup sweep cadence (0 = disabled)
+```
+
+## 7. systemd unit (auto-start on boot)
+
+```sh
+sudo tee /etc/systemd/system/cli2api.service >/dev/null <<'EOF'
+[Unit]
+Description=cli2api — OpenAI/Anthropic-compatible MuleRun proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cli2api
+Group=cli2api
+EnvironmentFile=/etc/cli2api/env
+ExecStart=/usr/local/bin/cli2api
+Restart=on-failure
+RestartSec=3
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/cli2api
+StateDirectory=cli2api
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now cli2api
+```
+
+Verify:
+
+```sh
+systemctl status cli2api --no-pager
+journalctl -u cli2api -f          # follow logs
+
+curl -s localhost:51222/healthz   # -> ok
+curl -s localhost:51222/v1/images/generations \
+  -H "Authorization: Bearer $YOUR_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"wan2.6-t2i","prompt":"a test","size":"1024x1024"}'
+```
+
+The startup log line shows `version`, `token_source`, `jobstore`, and the port.
+If you see `looks like an OAuth JWT` — your `MULERUN_TOKEN` is the wrong kind;
+re-do §2.
+
+## 8. TLS reverse proxy (nginx)
+
+Terminate TLS and forward to `127.0.0.1:51222`. **Streaming and slow models
+need buffering off and a long read timeout:**
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name api.example.com;
+    ssl_certificate     /etc/letsencrypt/live/api.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;
+
+    location /v1/ {
+        proxy_pass http://127.0.0.1:51222;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_buffering off;            # SSE + audio streaming
+        proxy_read_timeout 900s;        # gpt-image-2 / video can run minutes
+        client_max_body_size 64M;       # multipart image edits
+    }
+
+    location = /healthz {
+        proxy_pass http://127.0.0.1:51222;
+        access_log off;
+    }
+}
+```
+
+Caddy equivalent: `reverse_proxy 127.0.0.1:51222` plus
+`flush_interval -1` (disable buffering) inside the route.
+
+## 9. Update / rollback
+
+```sh
+sudo curl -sSL -o /usr/local/bin/cli2api \
+  https://github.com/yeagoo/MuleRunCLI2API/releases/latest/download/cli2api-linux-amd64
+sudo chmod +x /usr/local/bin/cli2api
+sudo systemctl restart cli2api
+```
+
+Pin a version by downloading `cli2api-v0.1.2-linux-amd64` instead of the
+`latest` stable name. Job state in libsql survives the restart.
+
+## 10. Operational checklist
+
+- [ ] `MULERUN_TOKEN` is a `muk-` key (no JWT warning at startup)
+- [ ] `CLI2API_API_KEYS` set if reachable beyond localhost
+- [ ] `CLI2API_JOBSTORE_DSN` set to a file/remote db (jobs survive restart)
+- [ ] `CLI2API_IMAGE_TIMEOUT` ≥ 15m if you use `gpt-image-2`
+- [ ] reverse proxy: `proxy_buffering off` + `proxy_read_timeout 900s`
+- [ ] systemd `Restart=on-failure` + `enable` (survives crashes and reboots)
+- [ ] secrets in `/etc/cli2api/env` (mode 640, group `cli2api`), never in git
+- [ ] `journalctl -u cli2api` reviewed for warnings on first boot
