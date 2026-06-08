@@ -27,6 +27,37 @@ mv "$W.real" "$W"
 Then `export MULERUN_TOKEN=muk-...`. The key is stable across runs, so you only
 need to do this once (store it in your `.env` / systemd unit).
 
+## Switching MuleRun accounts (or rotating the key)
+
+The `muk-` key is tied to one account. To point cli2api at a different account
+(e.g. one with credits) you re-login, capture the new key, and update the env.
+
+```sh
+# 1. Log into the account you want (browser OAuth).
+mulerun logout
+mulerun login
+mulerun user balance        # confirm balance > 0 on the new account
+
+# 2. Capture the new account's muk- key.
+W=$(readlink -f ~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter)
+mv "$W" "$W.real"
+printf '#!/bin/bash\nenv | grep ^MULEROUTER_API_KEY= | cut -d= -f2\n' > "$W"
+chmod +x "$W"
+NEWMUK=$(mulerun studio list 2>/dev/null | grep '^muk-' | head -1)
+mv "$W.real" "$W"
+
+# 3. Update MULERUN_TOKEN in place (keeps your other config), then restart.
+sudo sed -i "s|^MULERUN_TOKEN=.*|MULERUN_TOKEN=$NEWMUK|" /etc/cli2api/env
+sudo systemctl restart cli2api
+
+# 4. Verify — token_source should be env, no JWT warning, and a call succeeds.
+journalctl -u cli2api -n2 --no-pager
+```
+
+If you already have the new account's `muk-` key, skip steps 1–2 and just run
+step 3 with it. Running as a plain process instead of systemd? Replace the env
+edit with `export MULERUN_TOKEN=muk-...` and restart the process.
+
 ## Common errors
 
 ### `no mulerun credentials found`
@@ -38,6 +69,25 @@ You're using the OAuth JWT, not a `muk-` key. `mulerun login` caches a session
 JWT that the gateway rejects on **every** endpoint (image/video/audio AND
 chat). cli2api logs a startup warning when it detects a JWT. Fix: set
 `MULERUN_TOKEN` to your `muk-` key (see "Getting your muk- key" above).
+
+### `502 upstream HTTP 402` — out of MuleRun credits
+`402 Payment Required` means your MuleRun **account balance is exhausted**, not
+a rate limit (that would be 429) and not a cli2api bug — the gateway just
+relays the upstream's 402. Check your balance:
+
+```sh
+mulerun user balance      # data.balance — if ~0, you're out
+mulerun user wallets      # daily / monthly / longterm credits breakdown
+```
+
+Top up at [mulerun.com](https://mulerun.com) (the account you logged in with),
+then retry — no restart needed. Symptoms when nearly drained:
+
+- **Premium models fail first** (`gpt-image-2`, `nano-banana*`, `midjourney`
+  cost more per image) while the cheapest (`wan2.6-t2i`) still works for a
+  couple more calls, then it 402s too.
+- To stretch a small balance, prefer `wan2.6-t2i`; save `gpt-image-2` /
+  `midjourney` for images that truly need them.
 
 ### `/v1/chat/completions` returns `Model 'gpt-5' is not supported`
 Auth passed, but the studio-plane `muk-` key doesn't expose chat models. Text

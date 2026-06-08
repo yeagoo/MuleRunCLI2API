@@ -198,7 +198,27 @@ sudo systemctl restart cli2api
 Pin a version by downloading `cli2api-v0.1.2-linux-amd64` instead of the
 `latest` stable name. Job state in libsql survives the restart.
 
-## 10. Operational checklist
+## 10. Watch your MuleRun balance
+
+cli2api relays upstream `402 Payment Required` as `502 upstream HTTP 402` when
+your MuleRun account runs out of credits — and it drains silently (premium
+models like `gpt-image-2` cost the most). A simple hourly alert beats finding
+out via a failed request:
+
+```sh
+# /usr/local/bin/cli2api-balance-check.sh
+#!/bin/bash
+bal=$(mulerun user balance -o json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["balance"])')
+awk -v b="$bal" 'BEGIN{ if (b+0 < 100) exit 1 }' \
+  && logger -t cli2api "MuleRun balance OK: $bal" \
+  || logger -t cli2api -p user.warning "MuleRun balance LOW: $bal — top up at mulerun.com"
+```
+
+Drive it with a systemd timer (hourly) and watch `journalctl -t cli2api`. To
+switch to a funded account, see
+[Troubleshooting → switching accounts](/en/docs/troubleshooting).
+
+## 11. Operational checklist
 
 - [ ] `MULERUN_TOKEN` is a `muk-` key (no JWT warning at startup)
 - [ ] `CLI2API_API_KEYS` set if reachable beyond localhost
@@ -208,3 +228,4 @@ Pin a version by downloading `cli2api-v0.1.2-linux-amd64` instead of the
 - [ ] systemd `Restart=on-failure` + `enable` (survives crashes and reboots)
 - [ ] secrets in `/etc/cli2api/env` (mode 640, group `cli2api`), never in git
 - [ ] `journalctl -u cli2api` reviewed for warnings on first boot
+- [ ] MuleRun balance monitored (alert before it hits 0 → silent 402s)

@@ -189,7 +189,25 @@ sudo systemctl restart cli2api
 想钉版本就下 `cli2api-v0.1.2-linux-amd64` 而不是 `latest` 稳定名。libsql 里的 job
 状态会跨重启存活。
 
-## 10. 运维 checklist
+## 10. 盯住 MuleRun 余额
+
+账户没钱时上游返回 `402 Payment Required`，cli2api 包装成 `502 upstream HTTP 402`
+透传——而且是**默默花光**（`gpt-image-2` 这类 premium 模型最费）。加个每小时告警，
+比靠一次失败请求才发现强：
+
+```sh
+# /usr/local/bin/cli2api-balance-check.sh
+#!/bin/bash
+bal=$(mulerun user balance -o json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["balance"])')
+awk -v b="$bal" 'BEGIN{ if (b+0 < 100) exit 1 }' \
+  && logger -t cli2api "MuleRun balance OK: $bal" \
+  || logger -t cli2api -p user.warning "MuleRun balance LOW: $bal — 去 mulerun.com 充值"
+```
+
+用 systemd timer 每小时跑一次，盯 `journalctl -t cli2api`。要切到有钱的账号见
+[排错 → 切换账号](/cn/docs/troubleshooting)。
+
+## 11. 运维 checklist
 
 - [ ] `MULERUN_TOKEN` 是 `muk-` key（启动无 JWT 警告）
 - [ ] 超出 localhost 可达就设 `CLI2API_API_KEYS`
@@ -199,3 +217,4 @@ sudo systemctl restart cli2api
 - [ ] systemd `Restart=on-failure` + `enable`（崩溃和重启都能恢复）
 - [ ] 密钥放 `/etc/cli2api/env`（mode 640，组 `cli2api`），绝不进 git
 - [ ] 首次启动看一遍 `journalctl -u cli2api` 有无警告
+- [ ] 监控 MuleRun 余额（归 0 前告警 → 避免默默 402）

@@ -26,6 +26,36 @@ mv "$W.real" "$W"
 然后 `export MULERUN_TOKEN=muk-...`。这个 key 跨次调用稳定，只需抓一次
 （存进 `.env` / systemd 单元）。
 
+## 切换 MuleRun 账号（或轮换 key）
+
+`muk-` key 绑一个账号。要让 cli2api 指向另一个账号（比如有积分的那个），
+重新登录、抓新 key、更新 env。
+
+```sh
+# 1. 登录你要用的账号（浏览器 OAuth）。
+mulerun logout
+mulerun login
+mulerun user balance        # 确认新账号 balance > 0
+
+# 2. 抓新账号的 muk- key。
+W=$(readlink -f ~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter)
+mv "$W" "$W.real"
+printf '#!/bin/bash\nenv | grep ^MULEROUTER_API_KEY= | cut -d= -f2\n' > "$W"
+chmod +x "$W"
+NEWMUK=$(mulerun studio list 2>/dev/null | grep '^muk-' | head -1)
+mv "$W.real" "$W"
+
+# 3. 原地更新 MULERUN_TOKEN（保留其它配置），然后重启。
+sudo sed -i "s|^MULERUN_TOKEN=.*|MULERUN_TOKEN=$NEWMUK|" /etc/cli2api/env
+sudo systemctl restart cli2api
+
+# 4. 验证 —— token_source 应为 env、无 JWT 警告、调用成功。
+journalctl -u cli2api -n2 --no-pager
+```
+
+如果你已经有新账号的 `muk-` key，跳过 1–2 步，只用它跑第 3 步。直接前台跑
+（非 systemd）的话，把改 env 换成 `export MULERUN_TOKEN=muk-...` 再重启进程。
+
 ## 常见错误
 
 ### `no mulerun credentials found`
@@ -36,6 +66,22 @@ mv "$W.real" "$W"
 你用的是 OAuth JWT，不是 `muk-` key。`mulerun login` 缓存的会话 JWT 被网关在
 **所有**端点（图像/视频/音频和 chat）拒绝。cli2api 检测到 JWT 会在启动时警告。
 修复：把 `MULERUN_TOKEN` 设成你的 `muk-` key（见上面"怎么拿 muk- key"）。
+
+### `502 upstream HTTP 402` —— MuleRun 额度耗尽
+`402 Payment Required` 是你的 MuleRun **账户余额用光了**，不是限流（那是 429），
+也不是 cli2api 的 bug —— 网关只是把上游的 402 透传回来。查余额：
+
+```sh
+mulerun user balance      # data.balance —— 接近 0 就是没钱了
+mulerun user wallets      # daily / monthly / longterm credits 细分
+```
+
+去 [mulerun.com](https://mulerun.com) 充值（你登录的那个账号），然后重试即可，
+不用重启。快耗尽时的典型现象：
+
+- **premium 模型先挂**（`gpt-image-2`、`nano-banana*`、`midjourney` 单价高），
+  而最便宜的 `wan2.6-t2i` 还能再出几张，然后也 402。
+- 额度紧张时优先 `wan2.6-t2i`；`gpt-image-2` / `midjourney` 留给真正需要的图。
 
 ### `/v1/chat/completions` 返回 `Model 'gpt-5' is not supported`
 认证通过了，但 studio 平面的 `muk-` key 不暴露 chat 模型。文本端点
