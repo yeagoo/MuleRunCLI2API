@@ -182,9 +182,12 @@ func TestPlanChatForward_EmptyBodyDoesNotPanic(t *testing.T) {
 	}
 }
 
-func TestPlanChatForward_BigButLegacyStillStreams(t *testing.T) {
-	// A 10KB legacy body should NOT be fully buffered — it should stream.
-	// We verify the body slice is nil (streaming signal).
+func TestPlanChatForward_BigBodyBufferedForCorrectness(t *testing.T) {
+	// Bodies > peek must be fully buffered — the model field could sit
+	// anywhere in the body, and gating routing on a `/` in the head was
+	// the codex-review bug (model after messages → misroute to legacy).
+	// Trade-off: legacy chat loses streaming for >4KB bodies, vendor
+	// routing gains correctness regardless of field order.
 	big := strings.Repeat("x", 10_000)
 	in := `{"model":"gpt-5","messages":[{"role":"user","content":"` + big + `"}]}`
 	r := newPlanReq(in, nil)
@@ -192,8 +195,31 @@ func TestPlanChatForward_BigButLegacyStillStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if body != nil {
-		t.Fatalf("10KB legacy body should stream, got %d buffered bytes", len(body))
+	if body == nil {
+		t.Fatal("oversize legacy body should now be buffered, not streamed")
+	}
+	if len(body) != len(in) {
+		t.Fatalf("buffered body length mismatch: got %d want %d", len(body), len(in))
+	}
+}
+
+func TestPlanChatForward_VendorPrefixAfterLargeMessages(t *testing.T) {
+	// Codex review #1: a body where messages serialize BEFORE model and
+	// the head (4KB) contains no '/' would previously fall to legacy,
+	// silently misrouting a valid vendor-prefixed model. Verify the
+	// vendor path is picked correctly regardless of field order.
+	big := strings.Repeat("x", 8000) // > chatPeekHead
+	in := `{"messages":[{"role":"user","content":"` + big + `"}],"model":"openai/gpt-5.5"}`
+	r := newPlanReq(in, nil)
+	path, body, err := planChatForward(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/vendors/openai/v1/chat/completions" {
+		t.Fatalf("vendor model deep in body should still route to code-plane, got %q", path)
+	}
+	if body == nil || !bytes.Contains(body, []byte(`"model":"gpt-5.5"`)) {
+		t.Fatal("vendor prefix not stripped from deep-body request")
 	}
 }
 

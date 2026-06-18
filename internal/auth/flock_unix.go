@@ -10,22 +10,30 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// withCacheLock acquires an exclusive flock on `path` (creating the file
-// with mode 0600 if it doesn't exist) for the duration of fn. The lock is
-// released on return. This serializes the read-refresh-write window so two
-// cli2api processes — or cli2api + a concurrent `mulerun login` — can't
-// each consume the rotating refresh_token and invalidate the other.
+// withCacheLock acquires an exclusive flock over the read-refresh-write
+// window on the cache file. Implementation note: flock(2) locks an
+// underlying inode via the open file description, but our writeback path
+// uses tmp + os.Rename, which REPLACES the inode at `path`. A lock on
+// the renamed-away inode would be silently bypassed by any process that
+// reopens `path` after the rename and locks the new inode.
 //
-// If the lock file cannot be opened (e.g. read-only home), fn runs anyway
-// without locking: better degraded coordination than a hard failure on the
-// startup path. The caller gets the same outcome as before this helper was
-// introduced.
+// Workaround: lock a SIDECAR file (`path + ".lock"`) that is created once
+// and never replaced. The lock file is treated as a coordination primitive,
+// not data — its contents are empty and meaningless. Concurrent cli2api
+// processes (and a concurrent `mulerun login` if it adopts the same
+// convention) all flock the same stable inode.
+//
+// Graceful degradation: when the lock dir is read-only (e.g. running
+// against another user's $HOME), we fall back to unlocked execution
+// rather than crashing startup. The lock is best-effort coordination,
+// not a security boundary.
 func withCacheLock(path string, fn func() error) error {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	lockPath := path + ".lock"
+	f, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
-		// Common when the cache lives under a directory cli2api can read
-		// but not write (e.g. another user's $HOME). Run unlocked rather
-		// than blocking startup.
+		// Can't create the lock file (read-only mount, EACCES on the
+		// directory, etc.). Run fn unlocked — better degraded coordination
+		// than a hard failure on the startup path.
 		return fn()
 	}
 	defer f.Close()
@@ -36,7 +44,7 @@ func withCacheLock(path string, fn func() error) error {
 			// without lockd). Degrade gracefully.
 			return fn()
 		}
-		return fmt.Errorf("flock %s: %w", path, err)
+		return fmt.Errorf("flock %s: %w", lockPath, err)
 	}
 	defer func() { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN) }()
 

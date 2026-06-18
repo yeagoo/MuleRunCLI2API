@@ -75,61 +75,58 @@ func Messages(d Deps) http.Handler {
 
 // planChatForward decides where to send the request and what body to send.
 //
-// Return contract (single shape, no more tri-state):
+// Return contract:
 //   - upstream: the path mulerun.Client.Proxy will POST to.
-//   - body:     bytes to forward. nil = "stream the original r.Body
-//               unchanged" (legacy fast path). non-nil = "use this exact
-//               slice" (vendor rewrite, or body was fully buffered for
-//               other reasons).
-//   - err:      403/413/400-grade caller-visible error.
+//   - body:     bytes to forward. nil = "stream r.Body unchanged" (we may
+//               have replaced r.Body internally so the caller still gets a
+//               coherent reader). non-nil = "use this exact slice".
+//   - err:      caller-visible 413/400-grade error.
 //
-// Errors that aren't the caller's fault (transient network read errors
-// mid-upload) fall through to the upstream so it returns its own
-// transport-level signal — we don't want to fail open by forwarding a
-// truncated body.
+// Correctness vs streaming trade-off: a body that exceeds the peek window
+// (chatPeekHead) is ALWAYS fully buffered. We can't safely stream the tail
+// without inspecting the whole body — the model field could sit deeper than
+// the peek, and a vendor-prefixed model misrouted to legacy is a real bug
+// (codex review caught this). Bodies that fit in the peek still stream
+// (we hand r.Body back wrapped around the peek bytes).
 func planChatForward(r *http.Request) (upstream string, body []byte, err error) {
 	const legacy = "/v1/chat/completions"
 
 	// Compressed bodies can't be parsed without decompression. Skip
-	// rewriting and let the legacy proxy forward as-is — vendor routing
-	// requires uncompressed JSON. The body still goes through as a
-	// stream.
+	// rewriting; legacy proxy forwards as-is. Streams.
 	if r.Header.Get("Content-Encoding") != "" {
 		return legacy, nil, nil
 	}
 
-	// Peek the head. If the head contains no '/' character, the request
-	// can't possibly carry a vendor-prefixed model, so we stream the
-	// whole body through the legacy path without buffering.
 	head, peekErr := readPeek(r.Body, chatPeekHead)
 	if peekErr != nil {
 		return "", nil, peekErr
 	}
-	if !bytes.ContainsRune(head, '/') {
-		// Re-prepend the peeked head before the unread tail so Proxy() sees
-		// the full body in order.
-		r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(head), r.Body))
+
+	// Body fully captured by the peek. Try to rewrite; if no vendor
+	// prefix, restore r.Body so Proxy() reads the same bytes it would
+	// have seen pre-peek.
+	if len(head) < chatPeekHead {
+		if path, rewritten, ok := rewriteVendorModel(head); ok {
+			return path, rewritten, nil
+		}
+		r.Body = io.NopCloser(bytes.NewReader(head))
 		return legacy, nil, nil
 	}
 
-	// '/' could mean a vendor prefix, but it could also be a URL inside
-	// the messages array. Read the rest of the body, parse just the model
-	// field (preserving other fields byte-exact via json.RawMessage so
-	// int64s aren't downgraded to float64).
+	// Body extends past the peek. We have to read it all to know whether
+	// the model field carries a vendor prefix (it could sit anywhere in
+	// the body, regardless of head content). Streaming the tail would
+	// risk misrouting; buffer and parse.
 	rest, restErr := io.ReadAll(r.Body)
 	if restErr != nil {
 		return "", nil, restErr
 	}
 	full := append(head, rest...)
 
-	upstream, rewritten, ok := rewriteVendorModel(full)
-	if !ok {
-		// Couldn't rewrite (no prefix match, malformed JSON, etc.) — forward
-		// the original bytes verbatim on the legacy path. We can't stream
-		// here because we already consumed the body for the peek probe.
-		return legacy, full, nil
+	if path, rewritten, ok := rewriteVendorModel(full); ok {
+		return path, rewritten, nil
 	}
-	return upstream, rewritten, nil
+	return legacy, full, nil
 }
 
 // readPeek reads up to n bytes from r without consuming any more than that.
@@ -162,43 +159,77 @@ func rewriteVendorModel(body []byte) (upstream string, newBody []byte, ok bool) 
 	if len(body) == 0 {
 		return "", nil, false
 	}
-
-	// json.RawMessage preserves the original bytes of every value we don't
-	// touch. Only `model` is decoded as a string.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return "", nil, false
 	}
-	modelRaw, present := raw["model"]
-	if !present {
+	vendor, suffix, ok := extractVendorSuffix(raw)
+	if !ok {
 		return "", nil, false
 	}
-	var model string
-	if err := json.Unmarshal(modelRaw, &model); err != nil {
+	path, ok := registry.ChatVendorPaths[vendor]
+	if !ok {
 		return "", nil, false
 	}
-	idx := strings.IndexByte(model, '/')
-	if idx <= 0 || idx == len(model)-1 {
-		return "", nil, false
-	}
-	vendor, suffix := model[:idx], model[idx+1:]
-	path, hit := registry.ChatVendorPaths[vendor]
-	if !hit {
-		return "", nil, false
-	}
-
-	// Re-encode the stripped model name as JSON so any odd chars escape.
-	encoded, err := json.Marshal(suffix)
-	if err != nil {
-		return "", nil, false
-	}
-	raw["model"] = encoded
-
-	out, err := json.Marshal(raw)
-	if err != nil {
+	out, ok := writeBackModel(raw, suffix)
+	if !ok {
 		return "", nil, false
 	}
 	return path, out, true
+}
+
+// stripVendorPrefixForVendor rewrites the body's `model` field by stripping
+// a leading `<vendor>/` if (and only if) the prefix matches the given
+// vendor. Used by the Responses handler where the upstream path already
+// encodes a single vendor — we only want to strip its OWN prefix, not
+// re-route a foreign one.
+func stripVendorPrefixForVendor(body []byte, vendor string) (newBody []byte, ok bool) {
+	if len(body) == 0 || vendor == "" {
+		return nil, false
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, false
+	}
+	v, suffix, ok := extractVendorSuffix(raw)
+	if !ok || v != vendor {
+		return nil, false
+	}
+	return writeBackModel(raw, suffix)
+}
+
+// extractVendorSuffix pulls the model field out of a parsed JSON map and
+// splits it on the first '/'. Returns false unless the model is a
+// well-formed "vendor/suffix" pair (both halves non-empty).
+func extractVendorSuffix(raw map[string]json.RawMessage) (vendor, suffix string, ok bool) {
+	modelRaw, present := raw["model"]
+	if !present {
+		return "", "", false
+	}
+	var model string
+	if err := json.Unmarshal(modelRaw, &model); err != nil {
+		return "", "", false
+	}
+	idx := strings.IndexByte(model, '/')
+	if idx <= 0 || idx == len(model)-1 {
+		return "", "", false
+	}
+	return model[:idx], model[idx+1:], true
+}
+
+// writeBackModel replaces the model field in `raw` with `suffix` (encoded
+// as JSON for safe escaping) and re-marshals.
+func writeBackModel(raw map[string]json.RawMessage, suffix string) ([]byte, bool) {
+	encoded, err := json.Marshal(suffix)
+	if err != nil {
+		return nil, false
+	}
+	raw["model"] = encoded
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // writeChatError maps body-read failures to the right HTTP status. The
