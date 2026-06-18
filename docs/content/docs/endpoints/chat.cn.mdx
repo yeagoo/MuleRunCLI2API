@@ -6,10 +6,12 @@ icon: ChatCircle
 
 三个文本端点都是 MuleRun 原生 OpenAI/Anthropic 兼容 API 的**透明代理**，保留 SSE 流式。
 
-<Callout type="warn">
-文本端点需要 **LLM gateway** key，跟驱动图像/视频/音频的 `muk-` studio key 不是
-同一个。用 studio `muk-` key 会报 `Model '…' is not supported`；用原始 OAuth JWT
-会报 `401 Invalid API Key format`。详见[排错](/cn/docs/troubleshooting)。
+<Callout>
+你账号能调哪些模型取决于 MuleRun 开通了什么。典型的 `muk-` studio key 能用
+`deepseek-v4-*` 加上 GPT-5.x code-plane（`openai/gpt-5.5`、`openai/gpt-5.4-mini`…）。
+不带前缀的 `gpt-5` / `claude-*` 要 LLM gateway key。网关回
+`Model '…' is not supported` 就是账号权限问题——详见
+[排错](/cn/docs/troubleshooting)。
 </Callout>
 
 ## POST /v1/chat/completions
@@ -20,6 +22,10 @@ curl http://localhost:51222/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}'
 ```
+
+model 带 `vendor/` 前缀的会走 code-plane（目前 `openai/*` 路由到
+`/vendors/openai/v1/chat/completions`，前缀转发前会剥掉）。详见
+[模型清单](/cn/docs/models#文本代理)。
 
 ## POST /v1/responses
 
@@ -33,9 +39,58 @@ curl http://localhost:51222/v1/responses \
   -d '{"model":"gpt-5","input":"用一段话解释 Black-Scholes 公式。"}'
 ```
 
+### 内置工具（web_search、file_search、code_interpreter、image_generation）
+
+Responses API 把 OpenAI 服务端的工具目录直接做进请求 body 里——cli2api 不拦
+tools，原样透传。**应用要做实时联网搜索就走这条**：MuleRun 没独立的
+`/v1/search` 端点，但模型能自己调 `web_search` 并把结果内嵌到响应里。
+
+```sh
+curl http://localhost:51222/v1/responses \
+  -H "Authorization: Bearer $CLI2API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.5",
+    "input": "Go 当前最新稳定版本是什么？给出来源。",
+    "tools": [{"type": "web_search"}],
+    "max_output_tokens": 500
+  }'
+```
+
+响应的 `output` 数组按顺序交错模型事件：
+
+```json
+{
+  "status": "completed",
+  "output": [
+    {"type": "web_search_call", "status": "completed",
+     "action": {"type": "search", "query": "latest stable Go release 2026"}},
+    {"type": "message", "status": "completed",
+     "content": [{"type": "output_text",
+                  "text": "最新稳定版是 go1.26.4 …",
+                  "annotations": [{"type": "url_citation", "url": "https://go.dev/dl/", "title": "Downloads - The Go Programming Language"}]}]}
+  ]
+}
+```
+
+<Callout type="info" title="工具变体">
+- `{"type": "web_search"}` —— 公开网页搜索（GPT-5.x 全族）。
+- `{"type": "file_search"}` —— 搜索上传过的文件 / 向量库。
+- `{"type": "code_interpreter"}` —— 沙箱 Python。
+- `{"type": "image_generation"}` —— 内联调 OpenAI 图像模型。
+- 自定义 function tools 也行——cli2api 全部透传。
+</Callout>
+
+<Callout type="warn" title="Reasoning token 吃预算">
+GPT-5.x 出可见消息前会把 `max_output_tokens` 大部分耗在隐藏思考上。带 tool 的
+调用 `max_output_tokens` 给到 ≥500，不然容易 `finish_reason: length` 出空文本。
+看 `usage.completion_tokens_details.reasoning_tokens` 知道思考占了多少。
+</Callout>
+
 ## POST /v1/messages
 
-Anthropic 形态。接受 `x-api-key` 或 `Authorization: Bearer`。
+Anthropic 形态。接受 `x-api-key` 或 `Authorization: Bearer`。Claude 自己的
+`web_search_20250305` 工具也是从这里原样透传过去。
 
 ```sh
 curl http://localhost:51222/v1/messages \
