@@ -44,6 +44,23 @@ printf 'MULERUN_TOKEN=muk-xxxxxxxx\n' | sudo tee /etc/cli2api/env >/dev/null
 sudo chmod 640 /etc/cli2api/env
 ```
 
+<Callout type="info" title="想在 systemd 下用自动 refresh 的凭证？">
+下面的加固版 systemd 单元设了 `ProtectHome=true` + `User=cli2api`，所以
+`~/.config/mulerun/oauth_cache.json` 服务进程读不到。要用 OAuth cache 流程
+（排错文档里的方案 A），把 cache 复制到可写位置并指定路径：
+
+```sh
+sudo install -o cli2api -g cli2api -m 600 \
+  /home/$YOU/.config/mulerun/oauth_cache.json \
+  /var/lib/cli2api/oauth_cache.json
+echo "CLI2API_TOKEN_CACHE=/var/lib/cli2api/oauth_cache.json" \
+  | sudo tee -a /etc/cli2api/env
+```
+
+cli2api 会自己 refresh JWT，并把兑换出的 muk- 写回这个文件。如果服务长期没跑、
+refresh_token 链可能已经断了，重新跑一次 `mulerun login → install ...` 同步过来即可。
+</Callout>
+
 ## 3. 建独立用户 + 数据目录
 
 别用 root 跑网络服务。

@@ -16,19 +16,31 @@ icon: Gear
 | `CLI2API_POLL_INTERVAL` | `2s` | Initial upstream poll cadence |
 | `CLI2API_POLL_MAX_INTERVAL` | `10s` | Poll backoff ceiling |
 | `CLI2API_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `MULERUN_TOKEN` | *(reads `~/.config/mulerun/oauth_cache.json` then `~/.mulerun/`)* | Upstream MuleRun token |
-| `MULERUN_API_BASE_URL` | `https://api.mulerun.com` | Upstream base URL |
+| `MULERUN_TOKEN` | *(reads cache file then `~/.mulerun/`)* | Upstream MuleRun token (muk- or JWT) |
+| `MULERUN_API_BASE_URL` | `https://api.mulerun.com` | Upstream gateway base URL |
+| `CLI2API_TOKEN_CACHE` | *(`~/.config/mulerun/oauth_cache.json`)* | OAuth cache path. Set to a writable file for production containers / dedicated-user systemd setups. cli2api refreshes JWTs and caches the exchanged muk- here. |
+| `CLI2API_OAUTH_TIMEOUT` | `10s` | Per-call deadline for the JWT exchange + token refresh round-trips. Bounds cold-start work under k8s/PaaS readiness probes. |
+| `MULERUN_OAUTH_BASE_URL` | `https://mulerun.com` | OAuth/platform host (cli-token + oauth2/token endpoints). Distinct from the inference gateway above. |
 
 See `.env.example` in the repo for a copy-paste template.
 
 ## Credential discovery order
 
 1. `MULERUN_TOKEN` env var
-2. `~/.config/mulerun/oauth_cache.json` (mulerun-cli ≥0.1.0) — respects
-   `expires_at`; an expired token is skipped
+   - `muk-...` → used as-is
+   - `eyJ...` (JWT) → exchanged at startup; **not** cached to disk (see caveat)
+2. `CLI2API_TOKEN_CACHE` if set, else `~/.config/mulerun/oauth_cache.json`
+   (mulerun-cli ≥0.1.0)
+   - `cli2api_muk_key` field → fast-path, no HTTP
+   - else `access_token` + `refresh_token` → refresh if expired, exchange to
+     muk-, persist muk- back for the next startup
 3. `~/.mulerun/{auth,credentials,token}.json` (older versions)
 
 The startup log's `token_source` field shows which source was used.
+
+**Env-JWT caveat**: a JWT passed via `MULERUN_TOKEN` is re-exchanged on every
+restart (we don't write back to env). To benefit from disk caching, put your
+JWT in a file at `CLI2API_TOKEN_CACHE` instead.
 
 ## Reaper retention semantics
 

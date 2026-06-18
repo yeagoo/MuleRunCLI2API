@@ -47,6 +47,25 @@ printf 'MULERUN_TOKEN=muk-xxxxxxxx\n' | sudo tee /etc/cli2api/env >/dev/null
 sudo chmod 640 /etc/cli2api/env
 ```
 
+<Callout type="info" title="Want auto-refreshing creds under systemd instead?">
+The hardened systemd unit below sets `ProtectHome=true` + `User=cli2api`, so
+`~/.config/mulerun/oauth_cache.json` is unreachable from the service. To use
+the OAuth cache flow (Option A in Troubleshooting), copy the cache to a
+writable spot and point cli2api at it:
+
+```sh
+sudo install -o cli2api -g cli2api -m 600 \
+  /home/$YOU/.config/mulerun/oauth_cache.json \
+  /var/lib/cli2api/oauth_cache.json
+echo "CLI2API_TOKEN_CACHE=/var/lib/cli2api/oauth_cache.json" \
+  | sudo tee -a /etc/cli2api/env
+```
+
+cli2api will refresh the JWT on its own and persist the exchanged muk- back
+into that file. Re-copy or re-run `mulerun login → install ...` after a long
+absence in case the refresh_token chain rotated out of sync.
+</Callout>
+
 ## 3. Create a dedicated user + data dir
 
 Don't run network services as root.

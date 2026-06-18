@@ -102,13 +102,13 @@ func newFakeOAuthServer(t *testing.T) *fakeOAuthServer {
 	return f
 }
 
-// withBaseURL points the package-level oauthBaseURL at the fake server for
+// withBaseURL points the package-level testBaseURL at the fake server for
 // the duration of the test, then restores it.
 func withBaseURL(t *testing.T, url string) {
 	t.Helper()
-	old := oauthBaseURL
-	oauthBaseURL = url
-	t.Cleanup(func() { oauthBaseURL = old })
+	old := testBaseURL
+	testBaseURL = url
+	t.Cleanup(func() { testBaseURL = old })
 }
 
 func TestExchangeJWTForMUK_Success(t *testing.T) {

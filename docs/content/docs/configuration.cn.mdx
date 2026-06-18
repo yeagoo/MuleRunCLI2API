@@ -16,19 +16,29 @@ icon: Gear
 | `CLI2API_POLL_INTERVAL` | `2s` | 上游轮询初始周期 |
 | `CLI2API_POLL_MAX_INTERVAL` | `10s` | 轮询退避上限 |
 | `CLI2API_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `MULERUN_TOKEN` | *(读 `~/.config/mulerun/oauth_cache.json` 再 `~/.mulerun/`)* | 上游 MuleRun token |
-| `MULERUN_API_BASE_URL` | `https://api.mulerun.com` | 上游 base URL |
+| `MULERUN_TOKEN` | *(读 cache 文件再 `~/.mulerun/`)* | 上游 MuleRun token（muk- 或 JWT） |
+| `MULERUN_API_BASE_URL` | `https://api.mulerun.com` | 上游网关 base URL |
+| `CLI2API_TOKEN_CACHE` | *(`~/.config/mulerun/oauth_cache.json`)* | OAuth cache 路径。生产容器/独立用户 systemd 部署里指向可写文件，cli2api 会 refresh JWT 并把兑换出的 muk- 缓存进来。 |
+| `CLI2API_OAUTH_TIMEOUT` | `10s` | JWT 兑换 + token refresh 的单次调用超时。控制冷启动开销，避免 k8s/PaaS readiness probe 误判。 |
+| `MULERUN_OAUTH_BASE_URL` | `https://mulerun.com` | OAuth/平台 host（cli-token + oauth2/token 端点），跟上面的推理网关是不同的。 |
 
 仓库里的 `.env.example` 有可复制的模板。
 
 ## 凭证发现顺序
 
 1. `MULERUN_TOKEN` 环境变量
-2. `~/.config/mulerun/oauth_cache.json`（mulerun-cli ≥0.1.0）—— 尊重
-   `expires_at`，过期 token 会被跳过
+   - `muk-...` → 直接用
+   - `eyJ...`（JWT）→ 启动时兑换，**不**写回磁盘（见下方提示）
+2. `CLI2API_TOKEN_CACHE` 如果设了，否则 `~/.config/mulerun/oauth_cache.json`
+   - 有 `cli2api_muk_key` → 快路径，没有 HTTP
+   - 否则读 `access_token` + `refresh_token`：过期就 refresh、兑换出 muk-、
+     把 muk- 写回文件给下次启动用
 3. `~/.mulerun/{auth,credentials,token}.json`（旧版本）
 
 启动日志的 `token_source` 字段显示用了哪个来源。
+
+**env-JWT 限制**：通过 `MULERUN_TOKEN` 传的 JWT 每次重启都会重新兑换（我们不写回
+env）。要享受磁盘缓存的话，把 JWT 放进 `CLI2API_TOKEN_CACHE` 文件里。
 
 ## Reaper 保留期语义
 

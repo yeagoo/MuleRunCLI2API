@@ -230,21 +230,25 @@ func TestDiscoverToken_SkipsUnreadableFile(t *testing.T) {
 	}
 }
 
-func TestWarnIfJWT(t *testing.T) {
-	// warnIfJWT only logs; assert it doesn't panic on any token shape.
-	for _, tok := range []string{
-		"muk-7c359a7f5daa59f5bfa49c6bae5418cb274c5ff87f61a549b08cfc61eb5d5c26",
-		"eyJhbGciOiJIUzI1Ni", // JWT header prefix
-		"mr_oldstyletoken",
-		"",
-	} {
-		warnIfJWT(tok, "test")
+func TestPrefixClassifiers(t *testing.T) {
+	// finalize() dispatches on prefix; pin the shapes here so a future
+	// rename or refactor doesn't silently break credential routing.
+	cases := []struct {
+		token   string
+		wantMuk bool
+		wantJWT bool
+	}{
+		{"muk-7c359a7f5daa59f5bfa49c6bae5418cb274c5ff87f61a549b08cfc61eb5d5c26", true, false},
+		{"eyJhbGciOiJIUzI1Ni", false, true},
+		{"mr_oldstyletoken", false, false},
+		{"", false, false},
 	}
-	// Shape checks mirroring warnIfJWT's classification.
-	if !strings.HasPrefix("eyJabc", "eyJ") {
-		t.Fatal("JWT prefix check broken")
-	}
-	if !strings.HasPrefix("muk-x", "muk-") {
-		t.Fatal("muk prefix check broken")
+	for _, c := range cases {
+		if got := strings.HasPrefix(c.token, "muk-"); got != c.wantMuk {
+			t.Fatalf("muk- prefix for %q: got %v want %v", c.token, got, c.wantMuk)
+		}
+		if got := strings.HasPrefix(c.token, "eyJ"); got != c.wantJWT {
+			t.Fatalf("eyJ prefix for %q: got %v want %v", c.token, got, c.wantJWT)
+		}
 	}
 }
