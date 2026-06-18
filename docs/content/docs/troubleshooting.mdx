@@ -11,21 +11,28 @@ per-account key that the MuleRun API gateway accepts. The OAuth token from
 `mulerun login` is a **session JWT** and does **not** work (see below).
 
 The `mulerun` CLI exchanges your login for a `muk-` key internally on each
-`studio` call but doesn't print it directly. To capture yours:
+`studio` call but doesn't print it. Use the one-liner that ships with cli2api
+to capture it:
 
 ```sh
-# Wrap the bundled mulerouter to print the key the CLI hands it, run once,
-# then restore. (Advanced — there's no official "print key" command yet.)
-W=$(readlink -f ~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter)
-mv "$W" "$W.real"
-printf '#!/bin/bash\nenv | grep ^MULEROUTER_API_KEY= | cut -d= -f2\n' > "$W"
-chmod +x "$W"
-mulerun studio list >/dev/null 2>&1   # prints muk-... to stdout
-mv "$W.real" "$W"
+# One-shot, no clone required:
+export MULERUN_TOKEN=$(curl -fsSL \
+  https://raw.githubusercontent.com/yeagoo/MuleRunCLI2API/master/scripts/get-muk-key.sh \
+  | bash)
 ```
 
-Then `export MULERUN_TOKEN=muk-...`. The key is stable across runs, so you only
-need to do this once (store it in your `.env` / systemd unit).
+Prerequisites: `mulerun` CLI installed (`npm i -g @mulerunai/cli`) and logged
+in (`mulerun login`). The script wraps the bundled `mulerouter` binary once,
+captures the key the CLI hands it, restores the binary, and prints the
+`muk-...` value to stdout — nothing else. The key is stable across runs, so
+you only need to capture it once (store it in your `.env` / systemd unit).
+
+<Callout type="info" title="What the script does">
+It temporarily replaces `~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter`
+with a 2-line shell stub that prints `$MULEROUTER_API_KEY`, runs
+`mulerun studio list` to trigger the exchange, then restores the original
+binary. The script traps EXIT/INT/TERM so the restore happens even on Ctrl-C.
+</Callout>
 
 ## Switching MuleRun accounts (or rotating the key)
 
@@ -38,13 +45,8 @@ mulerun logout
 mulerun login
 mulerun user balance        # confirm balance > 0 on the new account
 
-# 2. Capture the new account's muk- key.
-W=$(readlink -f ~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter)
-mv "$W" "$W.real"
-printf '#!/bin/bash\nenv | grep ^MULEROUTER_API_KEY= | cut -d= -f2\n' > "$W"
-chmod +x "$W"
-NEWMUK=$(mulerun studio list 2>/dev/null | grep '^muk-' | head -1)
-mv "$W.real" "$W"
+# 2. Capture the new account's muk- key with the one-liner.
+NEWMUK=$(curl -fsSL https://raw.githubusercontent.com/yeagoo/MuleRunCLI2API/master/scripts/get-muk-key.sh | bash)
 
 # 3. Update MULERUN_TOKEN in place (keeps your other config), then restart.
 sudo sed -i "s|^MULERUN_TOKEN=.*|MULERUN_TOKEN=$NEWMUK|" /etc/cli2api/env

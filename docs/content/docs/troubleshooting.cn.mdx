@@ -9,22 +9,26 @@ icon: Wrench
 cli2api 需要在 `MULERUN_TOKEN` 里放一个 **`muk-` API key**——绑账号的长期稳定 key，
 MuleRun API 网关认这个。`mulerun login` 拿到的是**会话 JWT**，**不能用**（见下）。
 
-`mulerun` CLI 每次 `studio` 调用时内部把登录态换成 `muk-` key，但不直接打印。
-抓你自己的：
+`mulerun` CLI 每次 `studio` 调用时内部把登录态换成 `muk-` key，但不打印。
+用 cli2api 仓库里自带的一行脚本抓出来：
 
 ```sh
-# 包一层 mulerouter 打印 CLI 传给它的 key，跑一次,再还原。
-# （进阶——目前没有官方的"打印 key"命令。）
-W=$(readlink -f ~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter)
-mv "$W" "$W.real"
-printf '#!/bin/bash\nenv | grep ^MULEROUTER_API_KEY= | cut -d= -f2\n' > "$W"
-chmod +x "$W"
-mulerun studio list >/dev/null 2>&1   # 打印 muk-... 到 stdout
-mv "$W.real" "$W"
+# 不用 clone，一行搞定：
+export MULERUN_TOKEN=$(curl -fsSL \
+  https://raw.githubusercontent.com/yeagoo/MuleRunCLI2API/master/scripts/get-muk-key.sh \
+  | bash)
 ```
 
-然后 `export MULERUN_TOKEN=muk-...`。这个 key 跨次调用稳定，只需抓一次
-（存进 `.env` / systemd 单元）。
+前置条件：装了 `mulerun` CLI（`npm i -g @mulerunai/cli`）并登录了
+（`mulerun login`）。脚本临时包一层 mulerouter 二进制，抓到 CLI 传给它的 key，
+再把二进制还原，stdout 只输出 `muk-...` 这一个值，别的什么也没有。这个 key 跨次调用
+稳定，只需抓一次（存进 `.env` / systemd 单元）。
+
+<Callout type="info" title="脚本做了什么">
+临时把 `~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter` 替换成一个
+2 行的 shell stub（打印 `$MULEROUTER_API_KEY`），跑 `mulerun studio list` 触发
+兑换，然后还原原始二进制。脚本 trap 了 EXIT/INT/TERM，即使 Ctrl-C 也会还原。
+</Callout>
 
 ## 切换 MuleRun 账号（或轮换 key）
 
@@ -37,13 +41,8 @@ mulerun logout
 mulerun login
 mulerun user balance        # 确认新账号 balance > 0
 
-# 2. 抓新账号的 muk- key。
-W=$(readlink -f ~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter)
-mv "$W" "$W.real"
-printf '#!/bin/bash\nenv | grep ^MULEROUTER_API_KEY= | cut -d= -f2\n' > "$W"
-chmod +x "$W"
-NEWMUK=$(mulerun studio list 2>/dev/null | grep '^muk-' | head -1)
-mv "$W.real" "$W"
+# 2. 用一行脚本抓新账号的 muk- key。
+NEWMUK=$(curl -fsSL https://raw.githubusercontent.com/yeagoo/MuleRunCLI2API/master/scripts/get-muk-key.sh | bash)
 
 # 3. 原地更新 MULERUN_TOKEN（保留其它配置），然后重启。
 sudo sed -i "s|^MULERUN_TOKEN=.*|MULERUN_TOKEN=$NEWMUK|" /etc/cli2api/env

@@ -23,16 +23,16 @@ cli2api --version    # cli2api v0.1.2
 ## 2. 拿到你的 `muk-` API key（一次性）
 
 cli2api 用 **`muk-` API key** 认证——绑账号、长期稳定。`mulerun login` 的 OAuth
-token **不能用**（网关返回 `401 Invalid API Key format`）。抓一次你的 key：
+token **不能用**（网关返回 `401 Invalid API Key format`）。用一行脚本抓出来：
 
 ```sh
-W=$(readlink -f ~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter)
-mv "$W" "$W.real"
-printf '#!/bin/bash\nenv | grep ^MULEROUTER_API_KEY= | cut -d= -f2\n' > "$W"
-chmod +x "$W"
-mulerun studio list >/dev/null 2>&1   # 打印 muk-...
-mv "$W.real" "$W"
+export MULERUN_TOKEN=$(curl -fsSL \
+  https://raw.githubusercontent.com/yeagoo/MuleRunCLI2API/master/scripts/get-muk-key.sh \
+  | bash)
 ```
+
+（前置条件：装好 `mulerun` CLI 且 `mulerun login` 登录过。脚本细节和怎么轮换
+key 见[排错](/cn/docs/troubleshooting#怎么拿你的-muk--api-key)。）
 
 存到只有 root 能读的地方——**别提交进 git**：
 

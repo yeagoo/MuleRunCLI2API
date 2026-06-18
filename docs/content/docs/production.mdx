@@ -26,16 +26,17 @@ cli2api --version    # cli2api v0.1.2
 
 cli2api authenticates with a **`muk-` API key** — stable and long-lived per
 account. The `mulerun login` OAuth token does **not** work (the gateway returns
-`401 Invalid API Key format`). Capture your key once:
+`401 Invalid API Key format`). Capture your key with the one-liner:
 
 ```sh
-W=$(readlink -f ~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter)
-mv "$W" "$W.real"
-printf '#!/bin/bash\nenv | grep ^MULEROUTER_API_KEY= | cut -d= -f2\n' > "$W"
-chmod +x "$W"
-mulerun studio list >/dev/null 2>&1   # prints muk-...
-mv "$W.real" "$W"
+export MULERUN_TOKEN=$(curl -fsSL \
+  https://raw.githubusercontent.com/yeagoo/MuleRunCLI2API/master/scripts/get-muk-key.sh \
+  | bash)
 ```
+
+(Prerequisite: `mulerun` CLI installed and `mulerun login` done. See
+[Troubleshooting](/en/docs/troubleshooting#getting-your-muk--api-key) for what
+the script does and how to rotate keys.)
 
 Store it where only root can read it — never commit it:
 
