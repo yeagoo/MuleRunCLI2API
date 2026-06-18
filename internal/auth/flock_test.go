@@ -1,3 +1,10 @@
+//go:build unix
+
+// The withCacheLock helper is a no-op on non-unix platforms (see
+// flock_other.go), so the serialization assertions here only mean
+// anything on unix. Gate the file so `go test ./...` on Windows doesn't
+// run a test whose contract requires the real flock implementation.
+
 package auth
 
 import (
