@@ -3,32 +3,57 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/openmule/cli2api/internal/mulerun"
+	"github.com/openmule/cli2api/internal/registry"
+	"github.com/openmule/cli2api/pkg/apierr"
 )
 
-// Chat returns the OpenAI-shaped /v1/chat/completions transparent proxy.
+// maxChatBody caps inbound chat request bodies. Aligned with the global
+// chi RequestSize middleware (64 MB) so a request rejected here is
+// rejected for the same reason elsewhere, not silently truncated.
+const maxChatBody = 64 << 20
+
+// chatPeekHead is how many head bytes we sniff before deciding whether to
+// fully buffer. Vendor-prefixed model IDs always contain '/'; if we don't
+// see one in the head, the request is almost certainly a legacy chat call
+// and we can keep streaming it through without ever buffering the full
+// body. The cost paid by vendor-prefixed requests is a single contiguous
+// read of the rest of the body, which we'd have to do anyway.
+const chatPeekHead = 4096
+
+// Chat returns the OpenAI-shaped /v1/chat/completions proxy.
 //
-// Two upstream surfaces are reachable depending on the requested model:
+// Routing surfaces:
+//   - Plain model name → /v1/chat/completions (legacy chat surface).
+//   - "vendor/foo" model where vendor ∈ registry.ChatVendorPaths →
+//     /vendors/{vendor}/v1/chat/completions; the prefix is stripped from
+//     the model field before forwarding (the upstream registry on the
+//     vendor surface uses bare names).
 //
-//   * Plain model name ("gpt-5", "deepseek-v4-flash", "claude-sonnet-4-6")
-//     → /v1/chat/completions — the legacy chat surface most accounts have.
-//
-//   * Vendor-prefixed model ("openai/gpt-5.5", "openai/gpt-5.3-codex", …)
-//     → /vendors/openai/v1/chat/completions — the "code-plane" surface
-//     `mulerun code` (opencode) hits for the newer GPT-5.x family. The
-//     prefix is STRIPPED from the model field before forwarding because
-//     the path already encodes the vendor.
-//
-// Falling back to the legacy path keeps every existing client working
-// unchanged; only requests that explicitly opt in via a vendor prefix
-// reach the new surface.
+// Streaming preserved on the legacy path: we peek at most chatPeekHead
+// bytes to detect a vendor prefix; if absent, the unread tail flows
+// through as a stream — pre-diff behavior. Only vendor-prefixed
+// requests pay the full-buffer + parse + re-marshal cost.
 func Chat(d Deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upstream, body := rewriteChatRequest(r)
+		// Bound the inbound body. MaxBytesReader fails the next Read with
+		// *http.MaxBytesError once the cap is crossed — unlike io.LimitReader
+		// which silently truncates (the original review finding).
+		r.Body = http.MaxBytesReader(w, r.Body, maxChatBody)
+
+		upstream, body, err := planChatForward(r)
+		if err != nil {
+			writeChatError(w, err)
+			return
+		}
+		// `body == nil` means "stream the original body through" — see the
+		// peek-then-stream branch in planChatForward.
 		if body != nil {
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			r.ContentLength = int64(len(body))
@@ -38,67 +63,156 @@ func Chat(d Deps) http.Handler {
 }
 
 // Messages returns the Anthropic-shaped /v1/messages transparent proxy.
+//
+// Anthropic vendor routing (e.g. "anthropic/claude-opus-4-7" hitting a
+// /vendors/anthropic/v1/messages surface) is NOT implemented — that
+// upstream URL hasn't been verified, and routing speculatively would
+// cause silent 404s. Document it as a known gap; revisit if mulerun
+// surfaces a confirmed Messages code-plane.
 func Messages(d Deps) http.Handler {
 	return proxyJSON(d.Client, "/v1/messages", mulerun.AuthAPIKey)
 }
 
-// vendorChatPaths maps a model-name prefix (the part before "/") to the
-// upstream HTTP path that serves it. Add new vendors here as we
-// reverse-engineer them.
-var vendorChatPaths = map[string]string{
-	"openai": "/vendors/openai/v1/chat/completions",
-}
-
-// rewriteChatRequest inspects the request body for a vendor-prefixed model
-// and, if found, returns (upstream-path, rewritten-body). When the request
-// uses no prefix (or an unknown prefix) the legacy path is returned and
-// newBody is nil — the caller forwards the original body without
-// re-buffering.
+// planChatForward decides where to send the request and what body to send.
 //
-// We only re-read the body when the prefix scan succeeds; in the common
-// case (no prefix) we don't allocate. The chat handler reads the body
-// fully either way because vendor routing requires JSON parsing, so this
-// adds no extra round-trip — only a parse and a re-marshal on hits.
-func rewriteChatRequest(r *http.Request) (upstream string, newBody []byte) {
+// Return contract (single shape, no more tri-state):
+//   - upstream: the path mulerun.Client.Proxy will POST to.
+//   - body:     bytes to forward. nil = "stream the original r.Body
+//               unchanged" (legacy fast path). non-nil = "use this exact
+//               slice" (vendor rewrite, or body was fully buffered for
+//               other reasons).
+//   - err:      403/413/400-grade caller-visible error.
+//
+// Errors that aren't the caller's fault (transient network read errors
+// mid-upload) fall through to the upstream so it returns its own
+// transport-level signal — we don't want to fail open by forwarding a
+// truncated body.
+func planChatForward(r *http.Request) (upstream string, body []byte, err error) {
 	const legacy = "/v1/chat/completions"
 
-	// Cap the read at 32 MB — the chi RequestSize middleware already
-	// caps the global per-request body, but this defends the JSON parser
-	// against a missing middleware in tests / future refactors.
-	const maxChatBody = 32 << 20
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxChatBody))
-	_ = r.Body.Close()
+	// Compressed bodies can't be parsed without decompression. Skip
+	// rewriting and let the legacy proxy forward as-is — vendor routing
+	// requires uncompressed JSON. The body still goes through as a
+	// stream.
+	if r.Header.Get("Content-Encoding") != "" {
+		return legacy, nil, nil
+	}
+
+	// Peek the head. If the head contains no '/' character, the request
+	// can't possibly carry a vendor-prefixed model, so we stream the
+	// whole body through the legacy path without buffering.
+	head, peekErr := readPeek(r.Body, chatPeekHead)
+	if peekErr != nil {
+		return "", nil, peekErr
+	}
+	if !bytes.ContainsRune(head, '/') {
+		// Re-prepend the peeked head before the unread tail so Proxy() sees
+		// the full body in order.
+		r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(head), r.Body))
+		return legacy, nil, nil
+	}
+
+	// '/' could mean a vendor prefix, but it could also be a URL inside
+	// the messages array. Read the rest of the body, parse just the model
+	// field (preserving other fields byte-exact via json.RawMessage so
+	// int64s aren't downgraded to float64).
+	rest, restErr := io.ReadAll(r.Body)
+	if restErr != nil {
+		return "", nil, restErr
+	}
+	full := append(head, rest...)
+
+	upstream, rewritten, ok := rewriteVendorModel(full)
+	if !ok {
+		// Couldn't rewrite (no prefix match, malformed JSON, etc.) — forward
+		// the original bytes verbatim on the legacy path. We can't stream
+		// here because we already consumed the body for the peek probe.
+		return legacy, full, nil
+	}
+	return upstream, rewritten, nil
+}
+
+// readPeek reads up to n bytes from r without consuming any more than that.
+// io.EOF (clean) and io.ErrUnexpectedEOF (body smaller than n, returned by
+// io.ReadFull when the underlying Reader EOFs mid-fill) both fold into a
+// successful read of whatever arrived — short bodies are normal.
+//
+// Distinct connection errors (read tcp..., use of closed network connection,
+// etc.) are surfaced so the handler can return 400 instead of silently
+// forwarding a partial body.
+func readPeek(r io.Reader, n int) ([]byte, error) {
+	buf := make([]byte, n)
+	got, err := io.ReadFull(r, buf)
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
+		return buf[:got], nil
+	}
 	if err != nil {
-		// We've already consumed the body; hand it back as-is. Worst case
-		// the upstream rejects and we surface its error.
-		return legacy, body
+		return nil, err
 	}
+	return buf[:got], nil
+}
 
-	// Empty body → no model to inspect; let the upstream return its own
-	// validation error.
+// rewriteVendorModel parses just enough of a JSON chat-completion body to
+// inspect the `model` field. If the model has a known vendor prefix the
+// prefix is stripped and the new body is returned along with the vendor's
+// upstream path. All other fields round-trip byte-exact through
+// json.RawMessage — no int64 → float64 precision loss, no canonical
+// re-encoding of nested arrays.
+func rewriteVendorModel(body []byte) (upstream string, newBody []byte, ok bool) {
 	if len(body) == 0 {
-		return legacy, nil
+		return "", nil, false
 	}
 
-	var msg map[string]any
-	if err := json.Unmarshal(body, &msg); err != nil {
-		return legacy, body
+	// json.RawMessage preserves the original bytes of every value we don't
+	// touch. Only `model` is decoded as a string.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return "", nil, false
 	}
-	model, _ := msg["model"].(string)
+	modelRaw, present := raw["model"]
+	if !present {
+		return "", nil, false
+	}
+	var model string
+	if err := json.Unmarshal(modelRaw, &model); err != nil {
+		return "", nil, false
+	}
 	idx := strings.IndexByte(model, '/')
 	if idx <= 0 || idx == len(model)-1 {
-		return legacy, body
+		return "", nil, false
 	}
 	vendor, suffix := model[:idx], model[idx+1:]
-	path, ok := vendorChatPaths[vendor]
-	if !ok {
-		return legacy, body
+	path, hit := registry.ChatVendorPaths[vendor]
+	if !hit {
+		return "", nil, false
 	}
 
-	msg["model"] = suffix
-	out, err := json.Marshal(msg)
+	// Re-encode the stripped model name as JSON so any odd chars escape.
+	encoded, err := json.Marshal(suffix)
 	if err != nil {
-		return legacy, body
+		return "", nil, false
 	}
-	return path, out
+	raw["model"] = encoded
+
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return "", nil, false
+	}
+	return path, out, true
+}
+
+// writeChatError maps body-read failures to the right HTTP status. The
+// chat surface uses OpenAI's error envelope so SDK clients surface a
+// readable message instead of an opaque 500.
+func writeChatError(w http.ResponseWriter, err error) {
+	var maxErr *http.MaxBytesError
+	if errors.As(err, &maxErr) {
+		apierr.Write(w, apierr.StyleOpenAI, http.StatusRequestEntityTooLarge,
+			fmt.Sprintf("request body too large (max %d bytes)", maxErr.Limit),
+			"request_too_large")
+		return
+	}
+	apierr.Write(w, apierr.StyleOpenAI, http.StatusBadRequest,
+		"failed to read request body: "+err.Error(),
+		"invalid_request")
 }

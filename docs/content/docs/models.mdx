@@ -69,6 +69,19 @@ with `finish_reason: length`, bump `max_tokens` to 500+ and check
 to thinking.
 </Callout>
 
+<Callout type="warn" title="Vendor routing edge cases">
+- **Anthropic models** (`anthropic/claude-*` etc.) on `/v1/messages` are
+  not yet routed to a code-plane surface — the corresponding upstream
+  hasn't been verified. Use the unprefixed `claude-opus-4-7` style for
+  now.
+- **Compressed requests** (Content-Encoding: gzip/br/deflate) skip
+  vendor routing because cli2api can't parse the body to inspect the
+  model field. Disable client-side compression for vendor-prefixed
+  requests.
+- **Body > 64MB** is rejected with HTTP 413 (`request_too_large`); the
+  same cap that the global RequestSize middleware enforces.
+</Callout>
+
 <Callout type="warn" title="No alias mapping">
 cli2api does **not** map OpenAI model names to MuleRun ones. Use MuleRun's real
 names (`gpt-image-2`, `wan2.6-t2i`, `midjourney`) — not `dall-e-3`. Aliases would

@@ -5,114 +5,252 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
-func newReq(body string) *http.Request {
+// rewriteVendorModel — pure function tests
+
+func TestRewriteVendorModel_OpenAIRouted(t *testing.T) {
+	in := `{"model":"openai/gpt-5.5","messages":[{"role":"user","content":"hi"}]}`
+	path, out, ok := rewriteVendorModel([]byte(in))
+	if !ok {
+		t.Fatal("expected rewrite hit")
+	}
+	if path != "/vendors/openai/v1/chat/completions" {
+		t.Fatalf("wrong path: %q", path)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	if got["model"] != "gpt-5.5" {
+		t.Fatalf("model not stripped: %v", got["model"])
+	}
+}
+
+func TestRewriteVendorModel_NoPrefix(t *testing.T) {
+	_, _, ok := rewriteVendorModel([]byte(`{"model":"gpt-5","messages":[]}`))
+	if ok {
+		t.Fatal("plain model should not rewrite")
+	}
+}
+
+func TestRewriteVendorModel_UnknownVendor(t *testing.T) {
+	_, _, ok := rewriteVendorModel([]byte(`{"model":"google/gemini-3"}`))
+	if ok {
+		t.Fatal("unknown vendor should not rewrite")
+	}
+}
+
+func TestRewriteVendorModel_TrailingSlash(t *testing.T) {
+	_, _, ok := rewriteVendorModel([]byte(`{"model":"openai/"}`))
+	if ok {
+		t.Fatal("trailing-slash model should not rewrite")
+	}
+}
+
+func TestRewriteVendorModel_MalformedJSON(t *testing.T) {
+	_, _, ok := rewriteVendorModel([]byte("not json"))
+	if ok {
+		t.Fatal("malformed JSON should not pretend to rewrite")
+	}
+}
+
+// #2 — Numeric precision preserved via json.RawMessage
+
+func TestRewriteVendorModel_PreservesLargeInt(t *testing.T) {
+	// seed > 2^53 would lose precision through float64 round-trip. The
+	// new RawMessage path leaves non-model fields byte-exact.
+	const bigSeed = 9007199254740993
+	in := `{"model":"openai/gpt-5.5","seed":9007199254740993,"messages":[]}`
+	_, out, ok := rewriteVendorModel([]byte(in))
+	if !ok {
+		t.Fatal("expected rewrite")
+	}
+	if !bytes.Contains(out, []byte("9007199254740993")) {
+		t.Fatalf("large int corrupted; output: %s", out)
+	}
+	// And the value survives a decoder set to UseNumber.
+	d := json.NewDecoder(bytes.NewReader(out))
+	d.UseNumber()
+	var got map[string]any
+	if err := d.Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := got["seed"].(json.Number).Int64()
+	if n != bigSeed {
+		t.Fatalf("seed corrupted: want %d got %d", bigSeed, n)
+	}
+}
+
+func TestRewriteVendorModel_PreservesNestedStructure(t *testing.T) {
+	in := `{"model":"openai/gpt-5.5","temperature":0.7,"stream":true,"tools":[{"type":"function","function":{"name":"fn","parameters":{"id":12345678901234567}}}]}`
+	_, out, ok := rewriteVendorModel([]byte(in))
+	if !ok {
+		t.Fatal("expected rewrite")
+	}
+	// Big nested int still byte-exact.
+	if !bytes.Contains(out, []byte("12345678901234567")) {
+		t.Fatalf("nested int corrupted: %s", out)
+	}
+}
+
+// planChatForward — handler integration tests
+
+func newPlanReq(body string, headers map[string]string) *http.Request {
 	r, _ := http.NewRequest(http.MethodPost, "/v1/chat/completions",
 		io.NopCloser(strings.NewReader(body)))
+	for k, v := range headers {
+		r.Header.Set(k, v)
+	}
 	return r
 }
 
-func TestRewriteChatRequest_VendorPrefixRouted(t *testing.T) {
-	r := newReq(`{"model":"openai/gpt-5.5","messages":[{"role":"user","content":"hi"}]}`)
-	path, body := rewriteChatRequest(r)
-
-	if path != "/vendors/openai/v1/chat/completions" {
-		t.Fatalf("expected vendor path, got %q", path)
-	}
-	if body == nil {
-		t.Fatal("expected rewritten body")
-	}
-	var got map[string]any
-	if err := json.Unmarshal(body, &got); err != nil {
+func TestPlanChatForward_LegacyStreams(t *testing.T) {
+	// Plain model with no '/' anywhere in the head → fast path returns
+	// body=nil signaling "stream original r.Body verbatim".
+	r := newPlanReq(`{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}`, nil)
+	path, body, err := planChatForward(r)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got["model"] != "gpt-5.5" {
-		t.Fatalf("model prefix not stripped: %v", got["model"])
+	if path != "/v1/chat/completions" {
+		t.Fatalf("wrong path: %q", path)
 	}
-	// messages must round-trip unchanged
-	msgs, _ := got["messages"].([]any)
-	if len(msgs) != 1 {
-		t.Fatalf("messages corrupted: %v", got["messages"])
+	if body != nil {
+		t.Fatal("legacy fast path should signal streaming via body=nil")
+	}
+	// And r.Body must contain the full original payload (peek prepended).
+	out, _ := io.ReadAll(r.Body)
+	if !strings.Contains(string(out), "gpt-5") {
+		t.Fatalf("peeked head not re-prepended: %s", out)
 	}
 }
 
-func TestRewriteChatRequest_NoPrefixUsesLegacy(t *testing.T) {
-	r := newReq(`{"model":"deepseek-v4-flash","messages":[]}`)
-	path, body := rewriteChatRequest(r)
-
-	if path != "/v1/chat/completions" {
-		t.Fatalf("expected legacy path, got %q", path)
+func TestPlanChatForward_VendorRoutes(t *testing.T) {
+	r := newPlanReq(`{"model":"openai/gpt-5.5","messages":[]}`, nil)
+	path, body, err := planChatForward(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/vendors/openai/v1/chat/completions" {
+		t.Fatalf("wrong path: %q", path)
 	}
 	if body == nil {
-		t.Fatal("body should be re-buffered for forwarding (we consumed it)")
+		t.Fatal("vendor path must return rewritten body bytes")
 	}
-	// And the body must not have been rewritten.
-	if !bytes.Contains(body, []byte(`"model":"deepseek-v4-flash"`)) {
-		t.Fatalf("body unexpectedly rewritten: %s", body)
+	if !bytes.Contains(body, []byte(`"model":"gpt-5.5"`)) {
+		t.Fatalf("prefix not stripped: %s", body)
 	}
 }
 
-func TestRewriteChatRequest_UnknownPrefixPassesThrough(t *testing.T) {
-	// "google/" is a known opencode prefix but cli2api hasn't mapped it
-	// (Google API is non-OpenAI shape). Treat unknown prefixes as legacy
-	// so the upstream returns its own clear "not supported" rather than
-	// us guessing wrong paths.
-	r := newReq(`{"model":"google/gemini-3-pro","messages":[]}`)
-	path, _ := rewriteChatRequest(r)
+func TestPlanChatForward_ContentEncodingSkipsRewrite(t *testing.T) {
+	// #4 fix: gzipped vendor-prefix requests previously silently
+	// mis-routed to legacy (failed JSON parse). Now we explicitly bail
+	// on any Content-Encoding so the legacy stream path runs.
+	r := newPlanReq(`{"model":"openai/gpt-5.5"}`, map[string]string{"Content-Encoding": "gzip"})
+	path, body, err := planChatForward(r)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if path != "/v1/chat/completions" {
-		t.Fatalf("unknown prefix should fall back to legacy, got %q", path)
+		t.Fatalf("compressed body must skip vendor rewrite, got %q", path)
+	}
+	if body != nil {
+		t.Fatal("compressed body should stream, not buffer")
 	}
 }
 
-func TestRewriteChatRequest_TrailingSlashIsNotAPrefix(t *testing.T) {
-	// "openai/" with nothing after isn't a real model name — falling back
-	// to legacy lets the upstream return its own validation error
-	// instead of us forwarding an empty model field.
-	r := newReq(`{"model":"openai/","messages":[]}`)
-	path, _ := rewriteChatRequest(r)
-	if path != "/v1/chat/completions" {
-		t.Fatalf("trailing-slash model should not match vendor route, got %q", path)
+func TestPlanChatForward_EmptyBodyDoesNotPanic(t *testing.T) {
+	// #9: empty body used to leave r.Body closed-but-not-reassigned.
+	// Now we re-prepend the peek (which is also empty) and stream.
+	r := newPlanReq("", nil)
+	path, body, err := planChatForward(r)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestRewriteChatRequest_InvalidJSONFallsThrough(t *testing.T) {
-	// We must not crash on bad JSON; upstream will reject and surface the
-	// error to the client.
-	r := newReq(`not json at all`)
-	path, body := rewriteChatRequest(r)
-	if path != "/v1/chat/completions" {
-		t.Fatalf("malformed JSON should pass through, got %q", path)
-	}
-	if string(body) != "not json at all" {
-		t.Fatalf("body should be preserved verbatim, got %q", body)
-	}
-}
-
-func TestRewriteChatRequest_EmptyBody(t *testing.T) {
-	r := newReq("")
-	path, body := rewriteChatRequest(r)
 	if path != "/v1/chat/completions" {
 		t.Fatalf("empty body should default to legacy, got %q", path)
 	}
 	if body != nil {
-		t.Fatalf("empty body shouldn't allocate, got %d bytes", len(body))
+		t.Fatal("empty body should stream")
+	}
+	// r.Body must still be readable.
+	if _, err := io.ReadAll(r.Body); err != nil {
+		t.Fatalf("r.Body unreadable after planChatForward: %v", err)
 	}
 }
 
-func TestRewriteChatRequest_PreservesNonModelFields(t *testing.T) {
-	// Rewriting must not drop other fields (temperature, stream, tools…).
-	in := `{"model":"openai/gpt-5.5","temperature":0.7,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
-	r := newReq(in)
-	_, body := rewriteChatRequest(r)
-	var got map[string]any
-	_ = json.Unmarshal(body, &got)
-	if got["temperature"] != 0.7 {
-		t.Fatalf("temperature dropped: %v", got["temperature"])
+func TestPlanChatForward_BigButLegacyStillStreams(t *testing.T) {
+	// A 10KB legacy body should NOT be fully buffered — it should stream.
+	// We verify the body slice is nil (streaming signal).
+	big := strings.Repeat("x", 10_000)
+	in := `{"model":"gpt-5","messages":[{"role":"user","content":"` + big + `"}]}`
+	r := newPlanReq(in, nil)
+	_, body, err := planChatForward(r)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got["stream"] != true {
-		t.Fatalf("stream flag dropped: %v", got["stream"])
+	if body != nil {
+		t.Fatalf("10KB legacy body should stream, got %d buffered bytes", len(body))
+	}
+}
+
+// #1 — MaxBytesReader integration test through the real handler
+
+func TestChat_413OnOversizedBody(t *testing.T) {
+	// The handler wraps r.Body in http.MaxBytesReader(w, _, maxChatBody)
+	// before calling planChatForward. We construct a body just over the
+	// limit and assert 413 — previously this was silently truncated.
+
+	// Use a tiny limit for the test (smaller than maxChatBody) by
+	// stub-wrapping via a synthetic handler:
+	const limit = 1024
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
+		_, _, err := planChatForward(r)
+		if err == nil {
+			t.Error("expected MaxBytesError")
+			return
+		}
+		writeChatError(w, err)
+	})
+
+	body := strings.Repeat("a", limit+1)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"openai/gpt-5.5","junk":"`+body+`"}`))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("want 413, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "request_too_large") {
+		t.Fatalf("expected request_too_large error type, got %s", w.Body.String())
+	}
+}
+
+// #3 — Body read error surfaces as 400, not silent partial forward
+
+type erroringReader struct{ reads atomic.Int32 }
+
+func (e *erroringReader) Read(p []byte) (int, error) {
+	e.reads.Add(1)
+	// Use io.ErrClosedPipe — a real connection-error class that's
+	// distinct from io.ErrUnexpectedEOF (which is the legitimate "body
+	// smaller than buf" signal).
+	return 0, io.ErrClosedPipe
+}
+
+func TestPlanChatForward_ReadErrorSurfaces(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		io.NopCloser(&erroringReader{}))
+	_, _, err := planChatForward(r)
+	if err == nil {
+		t.Fatal("expected error from failing Read")
+	}
+	if err != io.ErrClosedPipe {
+		t.Fatalf("want ErrClosedPipe, got %v", err)
 	}
 }

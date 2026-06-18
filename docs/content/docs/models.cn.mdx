@@ -64,6 +64,15 @@ GPT-5.x 模型族在出可见内容前会把 `max_tokens` 大部分用在 reason
 看 `usage.completion_tokens_details.reasoning_tokens` 知道思考用了多少。
 </Callout>
 
+<Callout type="warn" title="Vendor 路由的边界情况">
+- **Anthropic 模型**（`anthropic/claude-*` 等）在 `/v1/messages` 上**还没**接
+  code-plane 路由——对应上游 URL 没验过。先用不带前缀的 `claude-opus-4-7` 这种。
+- **压缩请求**（Content-Encoding: gzip/br/deflate）会跳过 vendor 路由，因为
+  cli2api 无法解析 body 看 model 字段。带 vendor 前缀的请求要关掉客户端压缩。
+- **Body > 64MB** 返回 HTTP 413（`request_too_large`），跟全局 RequestSize
+  中间件同一个上限。
+</Callout>
+
 <Callout type="warn" title="不做别名映射">
 cli2api **不**把 OpenAI 模型名映射到 MuleRun。请用 MuleRun 真名
 （`gpt-image-2`、`wan2.6-t2i`、`midjourney`）——不是 `dall-e-3`。别名会让客户端
