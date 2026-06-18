@@ -18,4 +18,11 @@ var KnownChatModels = []struct {
 	{"claude-sonnet-4-6", "anthropic"},
 	{"claude-haiku-4-5", "anthropic"},
 	{"claude-opus-4-7", "anthropic"},
+	// Vendor-prefixed models route through the code-plane surface
+	// (/vendors/openai/v1/chat/completions). These are the GPT-5.x family
+	// `mulerun code` exposes — useful for codex-style coding agents.
+	{"openai/gpt-5.5", "openai"},
+	{"openai/gpt-5.4-mini", "openai"},
+	{"openai/gpt-5.4-nano", "openai"},
+	{"openai/gpt-5.3-codex", "openai"},
 }

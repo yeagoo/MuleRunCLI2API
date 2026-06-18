@@ -33,14 +33,36 @@ MuleRouter spark、Midjourney）。
 
 ## 文本（代理）
 
-`/v1/models` 端点会列出以下 chat 模型供客户端发现，但 cli2api 不校验 `model`
-字段——原样转发，所以 MuleRun 支持的任何模型都能用。
+`/v1/models` 列出以下 chat 模型。cli2api 根据 model 名形态**自动路由**到两套
+不同的上游 surface，客户端不用配置。
 
-| 厂商 | 模型 |
-|------|------|
-| OpenAI | `gpt-5`、`gpt-5-mini`、`gpt-5-nano`、`gpt-4.1`、`gpt-4.1-mini`、`o4-mini` |
-| DeepSeek | `deepseek-v4-flash`、`deepseek-v4-pro` |
-| Anthropic | `claude-sonnet-4-6`、`claude-haiku-4-5`、`claude-opus-4-7` |
+| 厂商 | 模型 | 路由到 |
+|------|------|--------|
+| OpenAI（传统 chat） | `gpt-5`、`gpt-5-mini`、`gpt-5-nano`、`gpt-4.1`、`gpt-4.1-mini`、`o4-mini` | `/v1/chat/completions` |
+| OpenAI（code-plane） | `openai/gpt-5.5`、`openai/gpt-5.4-mini`、`openai/gpt-5.4-nano`、`openai/gpt-5.3-codex`† | `/vendors/openai/v1/chat/completions` |
+| DeepSeek | `deepseek-v4-flash`、`deepseek-v4-pro` | `/v1/chat/completions` |
+| Anthropic | `claude-sonnet-4-6`、`claude-haiku-4-5`、`claude-opus-4-7` | `/v1/chat/completions`（`/v1/messages` 用 x-api-key） |
+
+带 `vendor/` 前缀的 model 会切到 code-plane（`mulerun code` / opencode 用来跑
+GPT-5.x 新模型族的那条路径）。前缀在转发前会从 body 里**剥掉**，因为上游路径里
+已经编码了 vendor。
+
+† `openai/gpt-5.3-codex` 是 **Responses API** 模型——调用走 `/v1/responses`，
+不是 `/v1/chat/completions`。cli2api 自动把 Responses 调用代理到
+`/vendors/openai/v1/responses`。
+
+```sh
+# OpenAI SDK 指向 cli2api —— 通过 code-plane 跑 gpt-5.5：
+export OPENAI_BASE_URL=http://localhost:51222/v1
+export OPENAI_API_KEY=<你的 cli2api inbound key>
+codex --model openai/gpt-5.5
+```
+
+<Callout type="info" title="GPT-5.x thinking 模式吃 token">
+GPT-5.x 模型族在出可见内容前会把 `max_tokens` 大部分用在 reasoning 上。如果
+`message.content` 回空且 `finish_reason: length`，把 `max_tokens` 调到 500+，
+看 `usage.completion_tokens_details.reasoning_tokens` 知道思考用了多少。
+</Callout>
 
 <Callout type="warn" title="不做别名映射">
 cli2api **不**把 OpenAI 模型名映射到 MuleRun。请用 MuleRun 真名

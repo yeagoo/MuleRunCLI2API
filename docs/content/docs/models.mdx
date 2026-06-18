@@ -34,15 +34,40 @@ Alibaba Wan + happy-horse, MuleRouter spark, Midjourney).
 
 ## Text (proxy)
 
-The `/v1/models` endpoint advertises these chat models for client discovery, but
-cli2api doesn't validate the `model` field — it forwards verbatim, so any model
-MuleRun supports works.
+The `/v1/models` endpoint advertises these chat models for client discovery.
+cli2api routes them across two upstream surfaces based on the model name
+shape — no client-side config needed.
 
-| Vendor | Models |
-|--------|--------|
-| OpenAI | `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `o4-mini` |
-| DeepSeek | `deepseek-v4-flash`, `deepseek-v4-pro` |
-| Anthropic | `claude-sonnet-4-6`, `claude-haiku-4-5`, `claude-opus-4-7` |
+| Vendor | Models | Routes via |
+|--------|--------|-----------|
+| OpenAI (legacy chat) | `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `o4-mini` | `/v1/chat/completions` |
+| OpenAI (code-plane) | `openai/gpt-5.5`, `openai/gpt-5.4-mini`, `openai/gpt-5.4-nano`, `openai/gpt-5.3-codex`† | `/vendors/openai/v1/chat/completions` |
+| DeepSeek | `deepseek-v4-flash`, `deepseek-v4-pro` | `/v1/chat/completions` |
+| Anthropic | `claude-sonnet-4-6`, `claude-haiku-4-5`, `claude-opus-4-7` | `/v1/chat/completions` (with x-api-key for `/v1/messages`) |
+
+A `vendor/` prefix on the model name flips cli2api to the code-plane
+surface (the path `mulerun code` / opencode uses for the newer GPT-5.x
+family). The prefix is stripped from the body before forwarding because
+the upstream path already encodes the vendor.
+
+† `openai/gpt-5.3-codex` is a **Responses-API** model — call it via
+`/v1/responses`, not `/v1/chat/completions`. cli2api proxies Responses
+calls to `/vendors/openai/v1/responses` automatically.
+
+```sh
+# OpenAI SDK pointed at cli2api — gpt-5.5 through the code-plane:
+export OPENAI_BASE_URL=http://localhost:51222/v1
+export OPENAI_API_KEY=<your-cli2api-inbound-key>
+codex --model openai/gpt-5.5
+```
+
+<Callout type="info" title="GPT-5.x thinking-mode budget">
+The GPT-5.x family burns most of `max_tokens` on reasoning before
+producing any visible content. If `message.content` comes back empty
+with `finish_reason: length`, bump `max_tokens` to 500+ and check
+`usage.completion_tokens_details.reasoning_tokens` to see how much went
+to thinking.
+</Callout>
 
 <Callout type="warn" title="No alias mapping">
 cli2api does **not** map OpenAI model names to MuleRun ones. Use MuleRun's real
