@@ -34,8 +34,15 @@ Alibaba Wan + happy-horse, MuleRouter spark, Midjourney).
 
 ## Text (proxy)
 
-Any chat / messages / responses model MuleRun supports works — cli2api doesn't
-parse the `model` field, it forwards verbatim.
+The `/v1/models` endpoint advertises these chat models for client discovery, but
+cli2api doesn't validate the `model` field — it forwards verbatim, so any model
+MuleRun supports works.
+
+| Vendor | Models |
+|--------|--------|
+| OpenAI | `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `o4-mini` |
+| DeepSeek | `deepseek-v4-flash`, `deepseek-v4-pro` |
+| Anthropic | `claude-sonnet-4-6`, `claude-haiku-4-5`, `claude-opus-4-7` |
 
 <Callout type="warn" title="No alias mapping">
 cli2api does **not** map OpenAI model names to MuleRun ones. Use MuleRun's real

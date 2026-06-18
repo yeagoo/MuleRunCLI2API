@@ -13,6 +13,8 @@ var KnownChatModels = []struct {
 	{"gpt-4.1", "openai"},
 	{"gpt-4.1-mini", "openai"},
 	{"o4-mini", "openai"},
+	{"deepseek-v4-flash", "deepseek"},
+	{"deepseek-v4-pro", "deepseek"},
 	{"claude-sonnet-4-6", "anthropic"},
 	{"claude-haiku-4-5", "anthropic"},
 	{"claude-opus-4-7", "anthropic"},

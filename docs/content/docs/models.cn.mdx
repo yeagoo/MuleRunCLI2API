@@ -33,8 +33,14 @@ MuleRouter spark、Midjourney）。
 
 ## 文本（代理）
 
-任何 MuleRun 支持的 chat / messages / responses 模型都能用——cli2api 不解析
-`model` 字段，原样转发。
+`/v1/models` 端点会列出以下 chat 模型供客户端发现，但 cli2api 不校验 `model`
+字段——原样转发，所以 MuleRun 支持的任何模型都能用。
+
+| 厂商 | 模型 |
+|------|------|
+| OpenAI | `gpt-5`、`gpt-5-mini`、`gpt-5-nano`、`gpt-4.1`、`gpt-4.1-mini`、`o4-mini` |
+| DeepSeek | `deepseek-v4-flash`、`deepseek-v4-pro` |
+| Anthropic | `claude-sonnet-4-6`、`claude-haiku-4-5`、`claude-opus-4-7` |
 
 <Callout type="warn" title="不做别名映射">
 cli2api **不**把 OpenAI 模型名映射到 MuleRun。请用 MuleRun 真名
