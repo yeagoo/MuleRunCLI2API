@@ -6,32 +6,59 @@ icon: Wrench
 
 ## Getting your `muk-` API key
 
-cli2api needs a **`muk-` API key** in `MULERUN_TOKEN` — a stable, long-lived,
-per-account key that the MuleRun API gateway accepts. The OAuth token from
-`mulerun login` is a **session JWT** and does **not** work (see below).
+cli2api authenticates to MuleRun's gateway with a **`muk-` API key** — a
+stable, long-lived per-account key. Three ways to get one, ordered from
+laziest to most explicit:
 
-The `mulerun` CLI exchanges your login for a `muk-` key internally on each
-`studio` call but doesn't print it. Use the one-liner that ships with cli2api
-to capture it:
+### Option A — Zero-config (just `mulerun login`)
+
+Since v0.2.0, cli2api auto-handles OAuth. Just log in once:
 
 ```sh
-# One-shot, no clone required:
+mulerun login            # browser OAuth, writes ~/.config/mulerun/oauth_cache.json
+cli2api                  # reads the cache, exchanges JWT → muk- on startup
+```
+
+On every startup cli2api will:
+- read the cached JWT
+- refresh it (and write back the new tokens) if it's expired
+- POST it to `mulerun.com/api/platform/users/cli-token` to get your `muk-` key
+- use that for all gateway calls
+
+You'll see one of `exchanged OAuth JWT for muk- API key` or
+`refreshed expired OAuth tokens` in the startup log when this fires.
+
+### Option B — Capture once, paste forever
+
+If you'd rather not depend on the cache (e.g. for Docker/CI where you only
+have one secret slot), capture the `muk-` key once with the bundled script:
+
+```sh
 export MULERUN_TOKEN=$(curl -fsSL \
   https://raw.githubusercontent.com/yeagoo/MuleRunCLI2API/master/scripts/get-muk-key.sh \
   | bash)
 ```
 
-Prerequisites: `mulerun` CLI installed (`npm i -g @mulerunai/cli`) and logged
-in (`mulerun login`). The script wraps the bundled `mulerouter` binary once,
-captures the key the CLI hands it, restores the binary, and prints the
-`muk-...` value to stdout — nothing else. The key is stable across runs, so
-you only need to capture it once (store it in your `.env` / systemd unit).
+Prerequisites: `mulerun` CLI installed (`npm i -g @mulerunai/cli`) and
+logged in. The key is stable across runs so store it in your `.env` /
+systemd unit and forget about it.
 
-<Callout type="info" title="What the script does">
-It temporarily replaces `~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter`
-with a 2-line shell stub that prints `$MULEROUTER_API_KEY`, runs
-`mulerun studio list` to trigger the exchange, then restores the original
-binary. The script traps EXIT/INT/TERM so the restore happens even on Ctrl-C.
+### Option C — Pass the JWT directly
+
+If you have a JWT but no `muk-` key, just set it — cli2api will exchange it
+on startup (same flow as Option A):
+
+```sh
+export MULERUN_TOKEN=eyJhbGci...       # JWT
+cli2api                                # exchanges to muk- automatically
+```
+
+<Callout type="info" title="Which to pick">
+- Long-lived host / systemd → **Option A** (one-time `mulerun login`, no
+  secrets to rotate; JWT refresh is automatic).
+- Docker / Zeabur / CI → **Option B** (single static secret, no `mulerun`
+  CLI in the image, no writeback needed).
+- Bridging from a third-party OAuth flow → **Option C**.
 </Callout>
 
 ## Switching MuleRun accounts (or rotating the key)
@@ -67,10 +94,14 @@ Set `export MULERUN_TOKEN=muk-...` (see above). The startup log's
 `token_source` field shows which file/env it read.
 
 ### `502 upstream HTTP 401` / `Invalid API Key format` on **any** endpoint
-You're using the OAuth JWT, not a `muk-` key. `mulerun login` caches a session
-JWT that the gateway rejects on **every** endpoint (image/video/audio AND
-chat). cli2api logs a startup warning when it detects a JWT. Fix: set
-`MULERUN_TOKEN` to your `muk-` key (see "Getting your muk- key" above).
+Means the value you set as `MULERUN_TOKEN` reached the gateway as a non-`muk-`
+string — either auto-exchange was disabled by an unexpected token shape, or
+the exchange itself failed at startup (look for `JWT → muk- exchange failed`
+in the log). Fix paths:
+
+- v0.2.0+: just `mulerun login` and let cli2api handle it (Option A in
+  "Getting your `muk-` API key").
+- Or set `MULERUN_TOKEN` to your `muk-` key directly (Option B).
 
 ### `502 upstream HTTP 402` — out of MuleRun credits
 `402 Payment Required` means your MuleRun **account balance is exhausted**, not

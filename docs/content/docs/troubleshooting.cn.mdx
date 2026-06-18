@@ -6,28 +6,56 @@ icon: Wrench
 
 ## 怎么拿你的 `muk-` API key
 
-cli2api 需要在 `MULERUN_TOKEN` 里放一个 **`muk-` API key**——绑账号的长期稳定 key，
-MuleRun API 网关认这个。`mulerun login` 拿到的是**会话 JWT**，**不能用**（见下）。
+cli2api 用 **`muk-` API key** 跟 MuleRun 网关鉴权——绑账号的长期稳定 key。
+拿 key 有三种姿势，从最懒到最显式：
 
-`mulerun` CLI 每次 `studio` 调用时内部把登录态换成 `muk-` key，但不打印。
-用 cli2api 仓库里自带的一行脚本抓出来：
+### 方案 A — 零配置（只要 `mulerun login`）
+
+v0.2.0 起 cli2api 自动处理 OAuth。登一次就够：
 
 ```sh
-# 不用 clone，一行搞定：
+mulerun login            # 浏览器 OAuth，写 ~/.config/mulerun/oauth_cache.json
+cli2api                  # 启动时读 cache、换 JWT → muk-
+```
+
+每次启动 cli2api 都会：
+- 读缓存里的 JWT
+- 如果过期就 refresh 并把新 token 写回 cache
+- POST 到 `mulerun.com/api/platform/users/cli-token` 拿你的 `muk-` key
+- 之后所有上游调用都用这个 muk-
+
+触发时启动日志会出现 `exchanged OAuth JWT for muk- API key` 或
+`refreshed expired OAuth tokens`。
+
+### 方案 B — 抓一次永久粘贴
+
+如果你不想依赖 cache（比如 Docker/CI 只能塞一个 secret），用脚本一次性抓出
+`muk-`：
+
+```sh
 export MULERUN_TOKEN=$(curl -fsSL \
   https://raw.githubusercontent.com/yeagoo/MuleRunCLI2API/master/scripts/get-muk-key.sh \
   | bash)
 ```
 
-前置条件：装了 `mulerun` CLI（`npm i -g @mulerunai/cli`）并登录了
-（`mulerun login`）。脚本临时包一层 mulerouter 二进制，抓到 CLI 传给它的 key，
-再把二进制还原，stdout 只输出 `muk-...` 这一个值，别的什么也没有。这个 key 跨次调用
-稳定，只需抓一次（存进 `.env` / systemd 单元）。
+前置条件：装了 `mulerun` CLI（`npm i -g @mulerunai/cli`）且登录过。这个 key
+跨次调用稳定，塞进 `.env` / systemd 单元就别管了。
 
-<Callout type="info" title="脚本做了什么">
-临时把 `~/.mulerun/vendor/mulerouter/node_modules/.bin/mulerouter` 替换成一个
-2 行的 shell stub（打印 `$MULEROUTER_API_KEY`），跑 `mulerun studio list` 触发
-兑换，然后还原原始二进制。脚本 trap 了 EXIT/INT/TERM，即使 Ctrl-C 也会还原。
+### 方案 C — 直接传 JWT
+
+你只有 JWT 但没 muk- 的话，直接传——cli2api 启动时自动换（流程同方案 A）：
+
+```sh
+export MULERUN_TOKEN=eyJhbGci...       # JWT
+cli2api                                # 自动换成 muk-
+```
+
+<Callout type="info" title="怎么选">
+- 长期跑的机器 / systemd → **方案 A**（一次 `mulerun login`，没 secret 要轮换，
+  JWT 自动 refresh）。
+- Docker / Zeabur / CI → **方案 B**（一个静态 secret，镜像里不需要 `mulerun`
+  CLI，不用写回 cache）。
+- 桥接第三方 OAuth 流程 → **方案 C**。
 </Callout>
 
 ## 切换 MuleRun 账号（或轮换 key）
@@ -62,9 +90,12 @@ journalctl -u cli2api -n2 --no-pager
 文件/环境变量。
 
 ### 任意端点 `502 upstream HTTP 401` / `Invalid API Key format`
-你用的是 OAuth JWT，不是 `muk-` key。`mulerun login` 缓存的会话 JWT 被网关在
-**所有**端点（图像/视频/音频和 chat）拒绝。cli2api 检测到 JWT 会在启动时警告。
-修复：把 `MULERUN_TOKEN` 设成你的 `muk-` key（见上面"怎么拿 muk- key"）。
+说明你的 `MULERUN_TOKEN` 到网关时不是 `muk-` 形态——要么自动兑换被异常 token
+shape 跳过了，要么启动时兑换本身失败（日志看 `JWT → muk- exchange failed`）。
+修复方向：
+
+- v0.2.0+：直接 `mulerun login` 让 cli2api 自动处理（见"怎么拿 muk- key"方案 A）。
+- 或者把 `MULERUN_TOKEN` 直接设成 `muk-` key（方案 B）。
 
 ### `502 upstream HTTP 402` —— MuleRun 额度耗尽
 `402 Payment Required` 是你的 MuleRun **账户余额用光了**，不是限流（那是 429），

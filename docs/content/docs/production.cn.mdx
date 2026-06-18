@@ -22,8 +22,9 @@ cli2api --version    # cli2api v0.1.2
 
 ## 2. 拿到你的 `muk-` API key（一次性）
 
-cli2api 用 **`muk-` API key** 认证——绑账号、长期稳定。`mulerun login` 的 OAuth
-token **不能用**（网关返回 `401 Invalid API Key format`）。用一行脚本抓出来：
+cli2api 用 **`muk-` API key** 认证——绑账号、长期稳定。生产 systemd 常驻服务
+建议**直接钉静态 muk- key**（而不是 cache 流），少一个磁盘依赖、没有 JWT
+refresh 噪音、轮换也简单。一次抓出来：
 
 ```sh
 export MULERUN_TOKEN=$(curl -fsSL \
@@ -31,8 +32,9 @@ export MULERUN_TOKEN=$(curl -fsSL \
   | bash)
 ```
 
-（前置条件：装好 `mulerun` CLI 且 `mulerun login` 登录过。脚本细节和怎么轮换
-key 见[排错](/cn/docs/troubleshooting#怎么拿你的-muk--api-key)。）
+（前置条件：装好 `mulerun` CLI 且 `mulerun login` 登录过。不想放静态 secret
+的话，[排错](/cn/docs/troubleshooting#怎么拿你的-muk--api-key)里还有两套
+零配置方案可选。）
 
 存到只有 root 能读的地方——**别提交进 git**：
 

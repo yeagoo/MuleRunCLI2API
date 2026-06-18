@@ -25,8 +25,9 @@ cli2api --version    # cli2api v0.1.2
 ## 2. Get your `muk-` API key (once)
 
 cli2api authenticates with a **`muk-` API key** — stable and long-lived per
-account. The `mulerun login` OAuth token does **not** work (the gateway returns
-`401 Invalid API Key format`). Capture your key with the one-liner:
+account. For a long-running systemd service we recommend pinning a static
+`muk-` key (rather than the cache-based flow) — one fewer dependency on
+disk, no JWT refresh churn, and trivial to rotate. Capture it once:
 
 ```sh
 export MULERUN_TOKEN=$(curl -fsSL \
@@ -35,8 +36,8 @@ export MULERUN_TOKEN=$(curl -fsSL \
 ```
 
 (Prerequisite: `mulerun` CLI installed and `mulerun login` done. See
-[Troubleshooting](/en/docs/troubleshooting#getting-your-muk--api-key) for what
-the script does and how to rotate keys.)
+[Troubleshooting](/en/docs/troubleshooting#getting-your-muk--api-key) for
+two zero-config alternatives if you'd rather not bake a static secret.)
 
 Store it where only root can read it — never commit it:
 
