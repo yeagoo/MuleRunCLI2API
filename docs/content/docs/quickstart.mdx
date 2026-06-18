@@ -6,19 +6,55 @@ icon: Rocket
 
 ## 1. Get a MuleRun API key
 
-cli2api authenticates to MuleRun's API gateway with a **`muk-` API key** — a
-stable, long-lived, per-account key. Set it via `MULERUN_TOKEN`:
+cli2api authenticates with a **`muk-` API key** — a stable, long-lived,
+per-account key. Pick whichever flow fits your machine:
 
-```sh
-export MULERUN_TOKEN=muk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+<Tabs items={["A — mulerun login (easiest)", "B — one-line script", "C — paste muk- directly"]}>
+
+```sh tab="A — mulerun login (easiest)"
+# Install the MuleRun CLI once, then log in via browser.
+npm i -g @mulerunai/cli
+mulerun login
+
+# cli2api reads ~/.config/mulerun/oauth_cache.json, exchanges the
+# JWT → muk- on startup, refreshes the JWT when it expires, and
+# caches the muk- back into the same file for instant subsequent
+# starts. Nothing else to set.
+./cli2api
 ```
 
-<Callout type="warn" title="The mulerun login token is NOT enough">
-`mulerun login` caches an **OAuth/JWT session token** (`~/.config/mulerun/`),
-which the API gateway rejects with `401 Invalid API Key format`. cli2api will
-still *start* with it (so you can boot the server) but every upstream call
-fails until you provide a `muk-` key. The startup log warns when it detects a
-JWT. See [Troubleshooting → getting your muk- key](/en/docs/troubleshooting).
+```sh tab="B — one-line script"
+# Capture the muk- key once with the bundled helper, paste into env.
+# Prereq: mulerun CLI installed + `mulerun login` done.
+export MULERUN_TOKEN=$(curl -fsSL \
+  https://raw.githubusercontent.com/yeagoo/MuleRunCLI2API/master/scripts/get-muk-key.sh \
+  | bash)
+
+./cli2api    # token_source=env:MULERUN_TOKEN
+```
+
+```sh tab="C — paste muk- directly"
+# If you already have a muk- (e.g. from a teammate or vault).
+export MULERUN_TOKEN=muk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+./cli2api
+```
+
+</Tabs>
+
+<Callout type="info" title="Which to pick">
+- **A** — laptop / dev machine: zero static secret, auto-refresh, JWT and
+  muk- live in the cache file `mulerun login` already wrote.
+- **B** — container / CI / production systemd: one stable env var, no
+  filesystem dep, no `mulerun` CLI in the runtime image.
+- **C** — multi-tenant or vault-backed: bring your own key.
+</Callout>
+
+<Callout type="warn" title="The mulerun login token alone is NOT a `muk-` key">
+`mulerun login` caches an OAuth/JWT session token; MuleRun's gateway only
+accepts `muk-` keys. cli2api v0.2.0+ exchanges the JWT for a muk- at
+startup (flow A above), but if you set `MULERUN_TOKEN=eyJ...` manually
+without the exchange succeeding, every upstream call 401s. See
+[Troubleshooting → getting your muk- key](/en/docs/troubleshooting#getting-your-muk--api-key).
 </Callout>
 
 ## 2. Build and start

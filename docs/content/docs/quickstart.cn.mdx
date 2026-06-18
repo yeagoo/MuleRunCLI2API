@@ -6,18 +6,53 @@ icon: Rocket
 
 ## 1. 拿到 MuleRun API key
 
-cli2api 用 **`muk-` API key** 向 MuleRun API 网关认证——这是绑账号的长期稳定 key。
-通过 `MULERUN_TOKEN` 设置：
+cli2api 用 **`muk-` API key** 向 MuleRun 网关认证——这是绑账号的长期稳定 key。
+按你机器的情况选一条：
 
-```sh
-export MULERUN_TOKEN=muk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+<Tabs items={["A — mulerun login（最懒）", "B — 一行脚本", "C — 直接粘 muk-"]}>
+
+```sh tab="A — mulerun login（最懒）"
+# 装一次 MuleRun CLI，浏览器登录。
+npm i -g @mulerunai/cli
+mulerun login
+
+# cli2api 启动时读 ~/.config/mulerun/oauth_cache.json，自动换 JWT → muk-，
+# JWT 过期自动 refresh，并把 muk- 写回同一个文件，下次启动跳过 HTTP。
+# 完全不用配。
+./cli2api
 ```
 
-<Callout type="warn" title="mulerun login 的 token 不够用">
-`mulerun login` 缓存的是 **OAuth/JWT 会话 token**（`~/.config/mulerun/`），
-API 网关会用 `401 Invalid API Key format` 拒绝它。cli2api 仍能用它**启动**
-（服务能起来），但所有上游调用都会失败，直到你给一个 `muk-` key。启动日志检测到
-JWT 时会警告。详见[排错 → 怎么拿 muk- key](/cn/docs/troubleshooting)。
+```sh tab="B — 一行脚本"
+# 用仓库脚本一次性抓出 muk- 粘到 env。
+# 前置：装了 mulerun CLI 并 `mulerun login` 过。
+export MULERUN_TOKEN=$(curl -fsSL \
+  https://raw.githubusercontent.com/yeagoo/MuleRunCLI2API/master/scripts/get-muk-key.sh \
+  | bash)
+
+./cli2api    # token_source=env:MULERUN_TOKEN
+```
+
+```sh tab="C — 直接粘 muk-"
+# 你已经有 muk- 的话（比如同事/秘密管理给的）。
+export MULERUN_TOKEN=muk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+./cli2api
+```
+
+</Tabs>
+
+<Callout type="info" title="怎么选">
+- **A** —— 笔记本 / 开发机：没静态 secret、自动 refresh、JWT 和 muk- 都放
+  `mulerun login` 写好的 cache 文件里。
+- **B** —— 容器 / CI / 生产 systemd：一个稳定 env，没文件依赖，镜像里不用塞
+  `mulerun` CLI。
+- **C** —— 多租户或秘密管理派发：自带 key。
+</Callout>
+
+<Callout type="warn" title="mulerun login 的 token 本身不是 `muk-` key">
+`mulerun login` 缓存的是 OAuth/JWT 会话 token；MuleRun 网关只认 `muk-` key。
+cli2api v0.2.0+ 会在启动时帮你换（上面的 A 方案），但如果你手动设
+`MULERUN_TOKEN=eyJ...` 而兑换失败，所有上游调用就会 401。详见
+[排错 → 怎么拿 muk- key](/cn/docs/troubleshooting#怎么拿你的-muk--api-key)。
 </Callout>
 
 ## 2. 构建并启动
