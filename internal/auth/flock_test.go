@@ -1,9 +1,19 @@
-//go:build unix
+//go:build linux
 
-// The withCacheLock helper is a no-op on non-unix platforms (see
-// flock_other.go), so the serialization assertions here only mean
-// anything on unix. Gate the file so `go test ./...` on Windows doesn't
-// run a test whose contract requires the real flock implementation.
+// flock(2) semantics differ across unix platforms:
+//   * Linux: per-open-file-description. Each open() call returns a
+//     distinct OFD, so multiple opens within ONE process contend —
+//     which is what TestFlock_SidecarSurvivesCacheRename relies on.
+//   * macOS / *BSD: per-process (or per-file-table-entry). Same-process
+//     opens can both "acquire" the same lock, so the goroutine-based
+//     contention assertion (maxSeen == 1) trivially breaks even though
+//     INTER-process locking still works correctly.
+//
+// The production code (flock_unix.go) is portable across all unix; only
+// the test's same-process contention model is Linux-specific. CI runs
+// ubuntu-latest, so gating to Linux here is the cheapest fix. macOS
+// devs running `go test ./...` locally will see this test silently
+// skipped rather than misleadingly fail.
 
 package auth
 
