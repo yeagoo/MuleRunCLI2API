@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -193,6 +194,67 @@ func TestBufferForRewrite_InvalidGzip(t *testing.T) {
 	_, err := bufferForRewrite(w, r)
 	if err == nil {
 		t.Fatal("expected error from invalid gzip")
+	}
+}
+
+// Codex round 5 #1 — gzip bombs must 413, not silently truncate
+func TestBufferForRewrite_GzipBombReturns413(t *testing.T) {
+	// Compress a payload that decodes to MaxRequestBody+1MB. The
+	// compressed size is tiny (highly compressible repeating bytes);
+	// only the DECODED size triggers the cap. The old io.LimitReader
+	// truncated silently; the new http.MaxBytesReader returns
+	// *MaxBytesError → 413 via writeChatError.
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	chunk := bytes.Repeat([]byte("a"), 1<<16) // 64 KB
+	// Write a bit more than MaxRequestBody decompressed.
+	for written := 0; written <= MaxRequestBody+(1<<20); written += len(chunk) {
+		_, _ = gz.Write(chunk)
+	}
+	_ = gz.Close()
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		bytes.NewReader(buf.Bytes()))
+	r.Header.Set("Content-Encoding", "gzip")
+	w := httptest.NewRecorder()
+
+	_, err := bufferForRewrite(w, r)
+	if err == nil {
+		t.Fatal("oversized decoded gzip body must error, not silently truncate")
+	}
+	var maxErr *http.MaxBytesError
+	if !errors.As(err, &maxErr) {
+		t.Fatalf("expected *http.MaxBytesError for oversized gzip, got %T: %v", err, err)
+	}
+}
+
+// Codex round 5 #2 — truncated gzip stream must error, not be served as short body
+func TestBufferForRewrite_TruncatedGzipReturnsError(t *testing.T) {
+	// Encode a valid gzip stream, then chop off the trailing checksum +
+	// length footer. gzip.Reader.Read on the truncated input returns
+	// io.ErrUnexpectedEOF. The old peek-based path folded that into a
+	// clean short read and forwarded a partial decoded body to upstream
+	// as if it were complete. The new ReadAll path surfaces the error.
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	_, _ = gz.Write([]byte(`{"model":"openai/gpt-5.5","messages":[{"role":"user","content":"hi"}]}`))
+	_ = gz.Close()
+	full := buf.Bytes()
+	// gzip footer is 8 bytes (CRC32 + uncompressed size). Chop them
+	// off to simulate a network-truncated upload.
+	if len(full) < 16 {
+		t.Skip("gzip output too small to truncate meaningfully")
+	}
+	truncated := full[:len(full)-8]
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		bytes.NewReader(truncated))
+	r.Header.Set("Content-Encoding", "gzip")
+	w := httptest.NewRecorder()
+
+	_, err := bufferForRewrite(w, r)
+	if err == nil {
+		t.Fatal("truncated gzip must error, not be served as a clean short body")
 	}
 }
 

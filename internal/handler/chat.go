@@ -96,19 +96,38 @@ func bufferForRewrite(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	case "", "identity":
 		// no-op
 	case "gzip":
-		// Decompress in-memory; drop the header so the upstream doesn't
-		// expect a still-gzipped body. The decompressed body flows
-		// through the normal peek+parse path so vendor routing works
-		// the same as for uncompressed requests (claude review #1).
+		// Decode fully into memory with a hard cap on the DECODED size.
+		// Three failure modes are handled cleanly here, none of which
+		// the original peek-based implementation got right (claude
+		// round 5 #1 + #2):
+		//
+		//   * Oversized decoded body → http.MaxBytesReader returns a
+		//     *http.MaxBytesError that writeChatError maps to 413,
+		//     defanging gzip bombs that wouldn't fit decoded.
+		//   * Truncated gzip stream → gzip.Reader.Read returns
+		//     io.ErrUnexpectedEOF, which io.ReadAll surfaces here
+		//     rather than letting it slip through readPeek as a clean
+		//     short body.
+		//   * Bad gzip header → caught by gzip.NewReader above.
+		//
+		// We bypass the peek path entirely for gzip — the body is
+		// already in memory, so reusing it directly is both simpler
+		// and avoids the EOF-vs-ErrUnexpectedEOF ambiguity readPeek
+		// has to fold for uncompressed bodies.
 		gz, gerr := gzip.NewReader(r.Body)
 		if gerr != nil {
 			return nil, fmt.Errorf("invalid gzip body: %w", gerr)
 		}
-		// Cap the decompressed size too — gzip bombs can multiply
-		// MaxRequestBody by 1000x.
-		r.Body = io.NopCloser(io.LimitReader(gz, MaxRequestBody+1))
+		defer gz.Close()
+		capped := http.MaxBytesReader(w, gz, MaxRequestBody)
+		decoded, derr := io.ReadAll(capped)
+		if derr != nil {
+			return nil, derr
+		}
 		r.Header.Del("Content-Encoding")
-		r.ContentLength = -1
+		r.Body = io.NopCloser(bytes.NewReader(decoded))
+		r.ContentLength = int64(len(decoded))
+		return decoded, nil
 	default:
 		// Unknown encoding (br, zstd, deflate). Forward as-is — the
 		// upstream will return its own error if it can't decode. Vendor
