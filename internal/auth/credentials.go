@@ -95,7 +95,7 @@ func tryCacheFile(path string) (token, source string) {
 		out    string
 		outSrc string
 	)
-	_ = withCacheLock(path, func() error {
+	if err := withCacheLock(path, func() error {
 		cache, err := readOAuthCacheFile(path)
 		if err != nil {
 			if !errors.Is(err, os.ErrNotExist) {
@@ -150,7 +150,15 @@ func tryCacheFile(path string) (token, source string) {
 		out = muk
 		outSrc = "file:" + path
 		return nil
-	})
+	}); err != nil {
+		// flock returned a real error (EIO from a flaky FS, EDEADLK from
+		// a buggy lockd, EPERM in a sandbox). The closure never ran, so
+		// out/outSrc stay empty and the caller falls through to legacy
+		// paths. Log loudly so the symptom (refresh-every-startup, no
+		// muk- cache hit) doesn't sit invisible in production.
+		slog.Warn("oauth cache lock failed; refresh/muk-cache will be skipped this startup",
+			"path", path, "err", err)
+	}
 	return out, outSrc
 }
 

@@ -94,6 +94,13 @@ func TestFlock_ReadOnlyDirDegradesGracefully(t *testing.T) {
 	// When the lock file can't be created (e.g., dir is read-only), fn
 	// should still run rather than failing the startup. The contract is:
 	// best-effort coordination, not a security boundary.
+	//
+	// Skip under root — chmod 0o500 doesn't restrict UID 0 from creating
+	// files, so the degradation path is never exercised on root-CI and
+	// the test would pass vacuously (claude review #5).
+	if os.Geteuid() == 0 {
+		t.Skip("chmod is bypassed by root; run as non-root to exercise the read-only fallback")
+	}
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Skip("cannot test read-only dir: chmod failed")

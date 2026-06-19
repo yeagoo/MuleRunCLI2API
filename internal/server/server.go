@@ -31,9 +31,10 @@ func New(cfg *config.Config, log *slog.Logger, store jobstore.Store) http.Handle
 	r.Use(middleware.Recoverer)
 	r.Use(requestLogger(log))
 	r.Use(corsMiddleware())
-	// Generous cap so /v1/images/edits with image (≤20 MB) + mask (≤20 MB)
-	// plus form overhead fits. Per-file cap is enforced inside the handler.
-	r.Use(middleware.RequestSize(64 << 20))
+	// Single source of truth for the inbound body cap. The chat/responses
+	// handlers also wrap with http.MaxBytesReader(handler.MaxRequestBody)
+	// — same constant, so the two never drift.
+	r.Use(middleware.RequestSize(handler.MaxRequestBody))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
