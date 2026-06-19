@@ -76,3 +76,17 @@ func TestStripVendorPrefix_EmptyAndMalformed(t *testing.T) {
 		t.Fatal("trailing-slash model should not strip")
 	}
 }
+
+func TestStripVendorPrefix_UnregisteredVendorRejected(t *testing.T) {
+	// Claude review #6: stripVendorPrefixForVendor now gates on
+	// registry.ChatVendorPaths membership, so even if a future caller
+	// hardcodes a vendor that isn't in the registry, the strip is
+	// refused. This keeps chat and responses paths from drifting on
+	// which vendors are valid.
+	if _, ok := stripVendorPrefixForVendor(
+		[]byte(`{"model":"future-vendor/some-model"}`),
+		"future-vendor",
+	); ok {
+		t.Fatal("vendor not in registry must not be stripped, even if caller specified it")
+	}
+}
