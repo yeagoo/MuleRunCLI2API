@@ -1,5 +1,5 @@
 {
   "title": "Endpoints",
   "icon": "Plugs",
-  "pages": ["chat", "images", "video", "audio"]
+  "pages": ["chat", "images", "video", "audio", "usage"]
 }

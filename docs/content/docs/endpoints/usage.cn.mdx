@@ -1,0 +1,96 @@
+---
+title: 用量
+description: cli2api 给每个上游请求写一条记录 —— 不用依赖 MuleRun 的 dashboard 就能回答"积分花在哪个模型上了"。
+icon: ChartBar
+---
+
+## 为什么
+
+MuleRun 自己的 dashboard 暴露的是当前余额（`mulerun user balance`），但
+**没有按调用维度的消耗 API** —— 你能看今天总数，看不出哪个模型烧掉的。
+cli2api 卡在每个客户端和 MuleRun 之间，所以能自己记。
+
+v0.3.0 起，每个打到 `/v1/...` 的请求都会写一条 usage 记录。记录存在 libsql
+（不设 DSN 就在内存里），通过 `GET /v1/usage` 查询。
+
+## 记了什么
+
+| 字段 | 来源 |
+|------|------|
+| `timestamp` | 请求开始时间 |
+| `endpoint` | URL 路径（如 `/v1/chat/completions`） |
+| `model` | 从 JSON 响应体的 `model` 字段解析 |
+| `prompt_tokens`、`completion_tokens` | 从响应的 `usage.{prompt,completion}_tokens` 或 `usage.{input,output}_tokens` 解析 |
+| `status` | 上游 HTTP 状态码 (200、502、413…) |
+| `duration_ms` | handler 墙钟 |
+| `bytes_out` | 返回给客户端的字节数 |
+| `request_id` | 跟 `journalctl -u cli2api` 对照用 |
+| `api_key_hash` | 入站 key 的 SHA-256 前 12 位 hex —— 多租户归因用，不会存明文 |
+
+**流式响应**（SSE `text/event-stream`）跳过 body capture，不在内存里堆。
+record 仍有 endpoint/status/bytes，但 `model` 和 `tokens` 是 0 —— 这是不破坏
+streaming 的代价。大部分 chat 客户端是非流式，所以 token 覆盖率挺高。
+
+## GET /v1/usage
+
+查询参数（全部可选）：
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `from` | 24 小时前 | unix 秒 或 RFC3339 |
+| `to` | 当前 | unix 秒 或 RFC3339 |
+| `group_by` | `model` | `model` / `endpoint` / `status` / `day` / `hour` |
+| `model` | （无） | 按 model 过滤 |
+| `endpoint` | （无） | 按 endpoint 过滤 |
+
+```sh
+# 过去 24 小时花了什么
+curl http://localhost:51222/v1/usage \
+  -H "Authorization: Bearer $CLI2API_KEY" | jq
+
+# gpt-5.5 按小时分布（最近 2 天）
+curl "http://localhost:51222/v1/usage?model=openai/gpt-5.5&group_by=hour&from=$(date -d '-2 day' +%s)" \
+  -H "Authorization: Bearer $CLI2API_KEY" | jq
+
+# 各 endpoint 错误率
+curl "http://localhost:51222/v1/usage?group_by=endpoint" \
+  -H "Authorization: Bearer $CLI2API_KEY" | jq '.rows[] | {endpoint:.bucket, errors, calls}'
+```
+
+返回示例：
+
+```json
+{
+  "from":     "2026-06-28T03:00:00Z",
+  "to":       "2026-06-29T03:00:00Z",
+  "group_by": "model",
+  "filter":   { "model": "", "endpoint": "" },
+  "rows": [
+    { "bucket": "openai/gpt-5.5",     "calls": 142, "errors": 1, "prompt_tokens": 18234, "completion_tokens": 6543, "bytes_out": 412390 },
+    { "bucket": "deepseek-v4-flash",  "calls":  89, "errors": 0, "prompt_tokens":  7800, "completion_tokens": 4500, "bytes_out": 198044 }
+  ],
+  "totals":   { "calls": 231, "errors": 1, "prompt_tokens": 26034, "completion_tokens": 11043, "bytes_out": 610434 }
+}
+```
+
+## 配置
+
+| 环境变量 | 默认 | 说明 |
+|----------|------|------|
+| `CLI2API_USAGE_DSN` | *(空 = 内存)* | libsql DSN。形态跟 `CLI2API_JOBSTORE_DSN` 一样 —— 本地文件用 `file:/abs/path/usage.db`，Turso 用 `libsql://...?authToken=...`。 |
+| `CLI2API_USAGE_RETENTION` | `720h`（30 天） | 比这个旧的记录会被 reaper 删掉。`0s` = 不过期。 |
+| `CLI2API_USAGE_BUFFER` | `1024` | 异步 writer 通道大小。值越大越能扛住瞬时压力。 |
+
+Reaper 用 `CLI2API_REAPER_INTERVAL` 调度（跟 jobstore reaper 共用）。
+
+<Callout type="info" title="异步记录">
+Recorder 通过带缓冲的 channel 在请求关键路径外写。极端反压下（libsql 挂了 +
+持续高峰）多余记录会被丢，关闭服务时日志里有计数。Handler 永远不会被
+recorder 阻塞。
+</Callout>
+
+<Callout type="warn" title="是近似值，不是账单">
+这里的 token 是**上游响应里报的** —— chat 类的会跟 MuleRun 给你计费的对得上。
+图像/视频/音频没有 token 字段，记录只有 endpoint + status + bytes。当观测用，
+不要替代 MuleRun 的账户账本。
+</Callout>

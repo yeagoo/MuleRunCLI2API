@@ -1,0 +1,103 @@
+---
+title: Usage
+description: Per-call records cli2api writes for every upstream request — answer "what did I spend my MuleRun credits on" without depending on MuleRun's dashboard.
+icon: ChartBar
+---
+
+## Why
+
+MuleRun's own dashboard exposes a current balance (`mulerun user balance`) but
+**no per-call API for consumption history** — you can see today's total but
+not which model burned it. cli2api sits between every client and MuleRun, so
+it can record the same data and surface it.
+
+Since v0.3.0, every request that hits a `/v1/...` endpoint is logged to a
+per-request usage record. The records live in libsql (or in-memory if no
+DSN is set) and are exposed through `GET /v1/usage`.
+
+## What's captured
+
+| Field | Source |
+|-------|--------|
+| `timestamp` | request start |
+| `endpoint` | URL path (e.g. `/v1/chat/completions`) |
+| `model` | parsed from JSON response body (`model` field) |
+| `prompt_tokens`, `completion_tokens` | parsed from response `usage.{prompt,completion}_tokens` or `usage.{input,output}_tokens` |
+| `status` | upstream HTTP status (200, 502, 413…) |
+| `duration_ms` | handler wall-clock |
+| `bytes_out` | response size to the client |
+| `request_id` | for cross-referencing with `journalctl -u cli2api` |
+| `api_key_hash` | first 12 hex of SHA-256(inbound key) — for multi-tenant attribution; never plaintext |
+
+**Streaming responses** (SSE `text/event-stream`) skip body capture entirely
+so they aren't held in memory. The record still gets endpoint/status/bytes
+but `model` and `tokens` are 0 — that's the trade-off for not breaking
+streaming. Most chat clients are non-streaming so token coverage is high.
+
+## GET /v1/usage
+
+Query params (all optional):
+
+| Param | Default | Notes |
+|-------|---------|-------|
+| `from` | 24h ago | unix seconds OR RFC3339 |
+| `to` | now | unix seconds OR RFC3339 |
+| `group_by` | `model` | `model` / `endpoint` / `status` / `day` / `hour` |
+| `model` | (none) | filter to one model |
+| `endpoint` | (none) | filter to one endpoint path |
+
+```sh
+# What did the last 24h cost?
+curl http://localhost:51222/v1/usage \
+  -H "Authorization: Bearer $CLI2API_KEY" | jq
+
+# Hourly breakdown for gpt-5.5 specifically
+curl "http://localhost:51222/v1/usage?model=openai/gpt-5.5&group_by=hour&from=$(date -d '-2 day' +%s)" \
+  -H "Authorization: Bearer $CLI2API_KEY" | jq
+
+# Error rate by endpoint
+curl "http://localhost:51222/v1/usage?group_by=endpoint" \
+  -H "Authorization: Bearer $CLI2API_KEY" | jq '.rows[] | {endpoint:.bucket, errors, calls}'
+```
+
+Sample response:
+
+```json
+{
+  "from":     "2026-06-28T03:00:00Z",
+  "to":       "2026-06-29T03:00:00Z",
+  "group_by": "model",
+  "filter":   { "model": "", "endpoint": "" },
+  "rows": [
+    { "bucket": "openai/gpt-5.5",     "calls": 142, "errors": 1, "prompt_tokens": 18234, "completion_tokens": 6543, "bytes_out": 412390 },
+    { "bucket": "deepseek-v4-flash",  "calls":  89, "errors": 0, "prompt_tokens":  7800, "completion_tokens": 4500, "bytes_out": 198044 }
+  ],
+  "totals":   { "calls": 231, "errors": 1, "prompt_tokens": 26034, "completion_tokens": 11043, "bytes_out": 610434 }
+}
+```
+
+## Configuration
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CLI2API_USAGE_DSN` | *(empty = memory)* | libsql DSN. Same shape as `CLI2API_JOBSTORE_DSN` — `file:/abs/path/usage.db` for local, `libsql://...?authToken=...` for Turso. |
+| `CLI2API_USAGE_RETENTION` | `720h` (30d) | Records older than this are deleted by the reaper. `0s` = never expire. |
+| `CLI2API_USAGE_BUFFER` | `1024` | Async writer channel size. Higher = more memory pressure tolerated at peak. |
+
+The reaper sweeps on `CLI2API_REAPER_INTERVAL` (shared with the job store
+reaper). Set it independently if you want different cadences.
+
+<Callout type="info" title="Recorded asynchronously">
+The recorder writes off the request hot path via a buffered channel; under
+extreme backpressure (e.g. libsql down + sustained burst) excess records
+drop and the count is logged on shutdown. Handlers never block on the
+recorder.
+</Callout>
+
+<Callout type="warn" title="Approximation, not billing">
+Tokens here are what the upstream **reported in its response** — they
+match what MuleRun charged you for chat. For image/video/audio surfaces
+there's no token field; the record carries endpoint + status + bytes
+only. Treat this as observability, not a substitute for MuleRun's
+account ledger.
+</Callout>

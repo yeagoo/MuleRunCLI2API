@@ -16,6 +16,7 @@ import (
 	"github.com/openmule/cli2api/internal/jobstore"
 	"github.com/openmule/cli2api/internal/registry"
 	"github.com/openmule/cli2api/internal/server"
+	"github.com/openmule/cli2api/internal/usage"
 )
 
 // version is the build version, injected at link time via
@@ -48,9 +49,18 @@ func main() {
 	}
 	defer store.Close()
 
+	usageStore, usageDesc, err := openUsageStore(cfg.UsageDSN)
+	if err != nil {
+		log.Error("usage store", "err", err)
+		os.Exit(1)
+	}
+	recorder := usage.NewRecorder(usageStore, log, cfg.UsageBuffer)
+	defer recorder.Close()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	jobstore.StartReaper(ctx, store, cfg.ReaperInterval, cfg.JobRetention, cfg.JobHardCapMult, log)
+	usage.StartReaper(ctx, usageStore, cfg.ReaperInterval, cfg.UsageRetention, log)
 
 	log.Info("startup",
 		"version", version,
@@ -65,11 +75,13 @@ func main() {
 		"job_retention", cfg.JobRetention.String(),
 		"reaper_interval", cfg.ReaperInterval.String(),
 		"job_hard_cap_mult", cfg.JobHardCapMult,
+		"usage_store", usageDesc,
+		"usage_retention", cfg.UsageRetention.String(),
 	)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           server.New(cfg, log, store),
+		Handler:           server.New(cfg, log, store, recorder),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -104,6 +116,20 @@ func openJobStore(dsn string) (jobstore.Store, string, error) {
 		return jobstore.NewMemory(), "memory", nil
 	}
 	s, err := jobstore.OpenLibSQL(dsn)
+	if err != nil {
+		return nil, "", err
+	}
+	return s, "libsql:" + redactDSN(dsn), nil
+}
+
+// openUsageStore mirrors openJobStore but for the per-request usage
+// records. Same DSN conventions; intentionally a separate switch so an
+// operator can persist jobs but not usage (or vice versa).
+func openUsageStore(dsn string) (usage.Store, string, error) {
+	if dsn == "" {
+		return usage.NewMemory(), "memory", nil
+	}
+	s, err := usage.OpenLibSQL(dsn)
 	if err != nil {
 		return nil, "", err
 	}

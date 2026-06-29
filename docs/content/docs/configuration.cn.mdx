@@ -15,6 +15,9 @@ icon: Gear
 | `CLI2API_IMAGE_TIMEOUT` | `5m` | 同步图像/语音最长等待 |
 | `CLI2API_POLL_INTERVAL` | `2s` | 上游轮询初始周期 |
 | `CLI2API_POLL_MAX_INTERVAL` | `10s` | 轮询退避上限 |
+| `CLI2API_USAGE_DSN` | *(空 = 内存)* | 用量记录的 libsql DSN —— 见[用量端点](/cn/docs/endpoints/usage)。 |
+| `CLI2API_USAGE_RETENTION` | `720h`（30 天） | 比此旧的记录会被 reaper 删掉。`0s` = 不过期。 |
+| `CLI2API_USAGE_BUFFER` | `1024` | 异步 writer 通道大小。 |
 | `CLI2API_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `MULERUN_TOKEN` | *(读 cache 文件再 `~/.mulerun/`)* | 上游 MuleRun token（muk- 或 JWT） |
 | `MULERUN_API_BASE_URL` | `https://api.mulerun.com` | 上游网关 base URL |

@@ -26,6 +26,10 @@ type Config struct {
 	ReaperInterval  time.Duration // 0 = reaper disabled
 	JobHardCapMult  float64       // hard-cap multiplier on retention for in-flight jobs
 
+	UsageDSN       string        // empty = in-memory; libsql DSN otherwise
+	UsageRetention time.Duration // 0 = records never expire
+	UsageBuffer    int           // recorder channel size (0 = default 1024)
+
 	TokenSource string
 }
 
@@ -39,6 +43,8 @@ const (
 	defaultJobRetention    = 7 * 24 * time.Hour
 	defaultReaperInterval  = time.Hour
 	defaultJobHardCapMult  = 3.0
+	defaultUsageRetention  = 30 * 24 * time.Hour // 30 days
+	defaultUsageBuffer     = 1024
 )
 
 func Load() (*Config, error) {
@@ -53,6 +59,9 @@ func Load() (*Config, error) {
 		JobRetention:    durationEnv("CLI2API_JOB_RETENTION", defaultJobRetention),
 		ReaperInterval:  durationEnv("CLI2API_REAPER_INTERVAL", defaultReaperInterval),
 		JobHardCapMult:  floatEnv("CLI2API_JOB_HARD_CAP_MULT", defaultJobHardCapMult),
+		UsageDSN:        strings.TrimSpace(os.Getenv("CLI2API_USAGE_DSN")),
+		UsageRetention:  durationEnv("CLI2API_USAGE_RETENTION", defaultUsageRetention),
+		UsageBuffer:     intEnv("CLI2API_USAGE_BUFFER", defaultUsageBuffer),
 	}
 
 	if raw := strings.TrimSpace(os.Getenv("CLI2API_API_KEYS")); raw != "" {
@@ -81,6 +90,18 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func intEnv(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
 }
 
 func durationEnv(key string, fallback time.Duration) time.Duration {

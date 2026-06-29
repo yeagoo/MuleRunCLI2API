@@ -15,6 +15,9 @@ icon: Gear
 | `CLI2API_IMAGE_TIMEOUT` | `5m` | Max wait for sync image/speech generation |
 | `CLI2API_POLL_INTERVAL` | `2s` | Initial upstream poll cadence |
 | `CLI2API_POLL_MAX_INTERVAL` | `10s` | Poll backoff ceiling |
+| `CLI2API_USAGE_DSN` | *(empty = memory)* | libsql DSN for per-call usage records — see [Usage endpoint](/en/docs/endpoints/usage). |
+| `CLI2API_USAGE_RETENTION` | `720h` (30d) | Records older than this are reaped. `0s` = never expire. |
+| `CLI2API_USAGE_BUFFER` | `1024` | Async writer channel size. |
 | `CLI2API_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `MULERUN_TOKEN` | *(reads cache file then `~/.mulerun/`)* | Upstream MuleRun token (muk- or JWT) |
 | `MULERUN_API_BASE_URL` | `https://api.mulerun.com` | Upstream gateway base URL |

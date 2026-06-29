@@ -13,9 +13,10 @@ import (
 	"github.com/openmule/cli2api/internal/handler"
 	"github.com/openmule/cli2api/internal/jobstore"
 	"github.com/openmule/cli2api/internal/mulerun"
+	"github.com/openmule/cli2api/internal/usage"
 )
 
-func New(cfg *config.Config, log *slog.Logger, store jobstore.Store) http.Handler {
+func New(cfg *config.Config, log *slog.Logger, store jobstore.Store, recorder *usage.Recorder) http.Handler {
 	client := mulerun.New(cfg.MulerunBaseURL, cfg.MulerunToken)
 	deps := handler.Deps{
 		Client:          client,
@@ -44,6 +45,7 @@ func New(cfg *config.Config, log *slog.Logger, store jobstore.Store) http.Handle
 	// OpenAI-style surface
 	r.Group(func(r chi.Router) {
 		r.Use(auth.Middleware(cfg.APIKeys, auth.StyleOpenAI))
+		r.Use(recorder.Middleware)
 		r.Method(http.MethodPost, "/v1/chat/completions", handler.Chat(deps))
 		r.Method(http.MethodPost, "/v1/responses", handler.Responses(deps))
 		r.Method(http.MethodPost, "/v1/images/generations", handler.Images(deps))
@@ -54,11 +56,16 @@ func New(cfg *config.Config, log *slog.Logger, store jobstore.Store) http.Handle
 		r.Method(http.MethodPost, "/v1/audio/music", handler.SubmitMusic(deps, store))
 		r.Method(http.MethodGet, "/v1/audio/music/{id}", handler.GetMusic(deps, store))
 		r.Method(http.MethodGet, "/v1/models", handler.Models(deps))
+		// Operator-only: per-call usage records cli2api itself writes.
+		// Reuses the same auth allow-list so it's not publicly readable
+		// when CLI2API_API_KEYS is set.
+		r.Method(http.MethodGet, "/v1/usage", handler.Usage(recorder.Store()))
 	})
 
 	// Anthropic-style surface
 	r.Group(func(r chi.Router) {
 		r.Use(auth.Middleware(cfg.APIKeys, auth.StyleAnthropic))
+		r.Use(recorder.Middleware)
 		r.Method(http.MethodPost, "/v1/messages", handler.Messages(deps))
 	})
 
