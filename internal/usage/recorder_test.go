@@ -171,6 +171,165 @@ func TestRecorder_DroppedOnFullBufferDoesNotBlockHandler(t *testing.T) {
 	}
 }
 
+// Round-4 of the usage feature: capture model from REQUEST body so
+// image/video/audio (responses without a model field) get attributed.
+
+func TestRecorder_CapturesImageModelFromRequestBody(t *testing.T) {
+	// gpt-image-2's response has no `model` field — just
+	// {"created":..., "data":[{"url":"..."}]}. Pre-fix the recorder
+	// stored model="" and /v1/usage?model=gpt-image-2 returned nothing.
+	// Post-fix: model is read from the request body.
+	store := NewMemory()
+	rec := NewRecorder(store, slog.New(slog.DiscardHandler), 8)
+	defer rec.Close()
+
+	// Handler simulates MuleRun's image response shape (no model echo).
+	var seenBody []byte
+	handler := rec.Middleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		seenBody, _ = io.ReadAll(req.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"created":1234,"data":[{"url":"https://x/y.png"}]}`))
+	}))
+
+	in := `{"model":"gpt-image-2","prompt":"hi","size":"1024x1024"}`
+	r := httptest.NewRequest(http.MethodPost, "/v1/images/generations",
+		strings.NewReader(in))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	waitFor(t, store, 1)
+
+	store.mu.RLock()
+	got := store.records[0].Model
+	store.mu.RUnlock()
+	if got != "gpt-image-2" {
+		t.Fatalf("model should be captured from request body, got %q", got)
+	}
+	// Critical: handler must still see the FULL request body.
+	if string(seenBody) != in {
+		t.Fatalf("body restoration broken; handler saw %q want %q", seenBody, in)
+	}
+}
+
+func TestRecorder_ResponseModelOverridesRequestModel(t *testing.T) {
+	// For chat, request says "openai/gpt-5.5" but cli2api strips the
+	// prefix before forwarding so upstream echoes "gpt-5.5". Stored
+	// model should be the upstream-canonical name.
+	store := NewMemory()
+	rec := NewRecorder(store, slog.New(slog.DiscardHandler), 8)
+	defer rec.Close()
+
+	handler := rec.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"gpt-5.5","usage":{"prompt_tokens":5}}`))
+	}))
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"openai/gpt-5.5","messages":[]}`))
+	r.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(httptest.NewRecorder(), r)
+	waitFor(t, store, 1)
+
+	store.mu.RLock()
+	got := store.records[0].Model
+	store.mu.RUnlock()
+	if got != "gpt-5.5" {
+		t.Fatalf("response-side model should override request-side; got %q want gpt-5.5", got)
+	}
+}
+
+func TestRecorder_RequestModelStandsWhenResponseHasNone(t *testing.T) {
+	// SSE chat responses don't get parsed for tokens (captureJSON==false
+	// for text/event-stream), so the request-side model is the only
+	// source. Must persist.
+	store := NewMemory()
+	rec := NewRecorder(store, slog.New(slog.DiscardHandler), 8)
+	defer rec.Close()
+
+	handler := rec.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte("data: {\"x\":1}\n\n"))
+	}))
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"deepseek-v4-flash","stream":true,"messages":[]}`))
+	r.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(httptest.NewRecorder(), r)
+	waitFor(t, store, 1)
+
+	store.mu.RLock()
+	got := store.records[0].Model
+	store.mu.RUnlock()
+	if got != "deepseek-v4-flash" {
+		t.Fatalf("SSE response should keep request-side model, got %q", got)
+	}
+}
+
+func TestRecorder_LargeRequestBodyRestoredViaMultiReader(t *testing.T) {
+	// Body > requestPeekMax must still be fully readable downstream.
+	store := NewMemory()
+	rec := NewRecorder(store, slog.New(slog.DiscardHandler), 8)
+	defer rec.Close()
+
+	bigField := strings.Repeat("x", requestPeekMax+5000) // ~69 KB > peek
+	in := `{"model":"gpt-image-2","prompt":"` + bigField + `"}`
+
+	var seenLen int
+	handler := rec.Middleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		body, _ := io.ReadAll(req.Body)
+		seenLen = len(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	r := httptest.NewRequest(http.MethodPost, "/v1/images/generations",
+		strings.NewReader(in))
+	r.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(httptest.NewRecorder(), r)
+	waitFor(t, store, 1)
+
+	if seenLen != len(in) {
+		t.Fatalf("handler saw %d bytes of body, want %d (MultiReader restore broken)", seenLen, len(in))
+	}
+	store.mu.RLock()
+	got := store.records[0].Model
+	store.mu.RUnlock()
+	if got != "gpt-image-2" {
+		t.Fatalf("model should still parse from head of >peek body, got %q", got)
+	}
+}
+
+func TestRecorder_NonJSONContentTypeSkipsPeek(t *testing.T) {
+	// multipart/form-data (image edits) and other non-JSON requests
+	// shouldn't trigger the peek — both for perf (form bodies can be
+	// large) and correctness (parsing a multipart as JSON would never
+	// work). Handler must see body untouched.
+	store := NewMemory()
+	rec := NewRecorder(store, slog.New(slog.DiscardHandler), 8)
+	defer rec.Close()
+
+	var seenBody []byte
+	handler := rec.Middleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		seenBody, _ = io.ReadAll(req.Body)
+		w.WriteHeader(200)
+	}))
+	body := "--boundary\r\nContent-Disposition: form-data\r\n\r\nblah\r\n--boundary--"
+	r := httptest.NewRequest(http.MethodPost, "/v1/images/edits",
+		strings.NewReader(body))
+	r.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
+	handler.ServeHTTP(httptest.NewRecorder(), r)
+	waitFor(t, store, 1)
+
+	if string(seenBody) != body {
+		t.Fatalf("multipart body altered: %q", seenBody)
+	}
+	store.mu.RLock()
+	got := store.records[0].Model
+	store.mu.RUnlock()
+	if got != "" {
+		t.Fatalf("non-JSON should not yield a model; got %q", got)
+	}
+}
+
 // helpers
 
 func waitFor(t *testing.T, s *Memory, n int) {

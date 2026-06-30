@@ -1,10 +1,12 @@
 package usage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -12,6 +14,14 @@ import (
 
 	"github.com/go-chi/chi/v5/middleware"
 )
+
+// requestPeekMax caps how many head bytes we read off req.Body to extract
+// the model field. 64 KB is enough for any reasonable JSON head — the
+// `model` field sits near the top of OpenAI-shaped bodies. Larger bodies
+// (e.g. multimodal chat with embedded base64 images) get the remaining
+// tail re-prepended via io.MultiReader so downstream handlers see the
+// full stream untouched.
+const requestPeekMax = 64 << 10
 
 // Recorder ingests Records on a buffered channel and writes them to a
 // Store in the background. Send is non-blocking — when the channel is
@@ -88,19 +98,38 @@ func (r *Recorder) Close() error {
 func (r *Recorder) Store() Store { return r.store }
 
 // Middleware wraps a handler so each completed request emits a Record.
-// Captures status + bytes_out via a ResponseWriter wrap. If the
-// response Content-Type is application/json, the body is buffered up
-// to captureMaxLen bytes and parsed for `model` + `usage.*_tokens`.
 //
-// Streaming responses (Content-Type text/event-stream) bypass body
-// capture entirely — they pass through with zero overhead beyond status
-// and byte counting.
+// Model detection runs in two stages, in priority order:
+//
+//  1. Request-side peek: for JSON requests, we read up to requestPeekMax
+//     bytes off req.Body, parse the `model` field, then restore the body
+//     so downstream handlers see the same stream. This is the only way
+//     to know the model for image/video/audio endpoints — their MuleRun
+//     responses don't echo `model`. Without this, /v1/usage's per-model
+//     breakdown was useless for non-chat surfaces (claude review of v0.3.0
+//     surfaced this).
+//
+//  2. Response-side parse: for JSON responses (chat / responses surfaces),
+//     parse the `model` and `usage.*_tokens` from the body. The model
+//     value here OVERRIDES the request-side value — upstream's echo is
+//     the canonical name (and for vendor-routed chat we strip the prefix
+//     before forwarding, so the request-side value would be the alias,
+//     not the upstream-recognised name).
+//
+// Streaming responses (Content-Type text/event-stream) bypass response-
+// body capture entirely; the request-side model still works.
 func (r *Recorder) Middleware(next http.Handler) http.Handler {
 	if r == nil {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		start := time.Now()
+
+		reqModel := ""
+		if isJSONContentType(req.Header.Get("Content-Type")) {
+			reqModel = peekRequestModel(req)
+		}
+
 		cw := newCapturingWriter(w, r.captureMaxLen)
 		next.ServeHTTP(cw, req)
 
@@ -112,12 +141,100 @@ func (r *Recorder) Middleware(next http.Handler) http.Handler {
 			BytesOut:   cw.bytesWritten,
 			RequestID:  middleware.GetReqID(req.Context()),
 			APIKeyHash: hashAPIKey(req),
+			Model:      reqModel,
 		}
 		if cw.captureJSON && cw.buf.Len() > 0 {
+			// May override Model with the canonical upstream name.
 			parseOpenAIJSON(cw.buf.Bytes(), rec)
 		}
 		r.Send(rec)
 	})
+}
+
+// isJSONContentType returns true for application/json (with or without
+// charset suffix). Used to gate the request-body peek so we don't waste
+// I/O on multipart uploads (image edits) or other non-JSON shapes.
+func isJSONContentType(ct string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(ct)), "application/json")
+}
+
+// peekRequestModel reads up to requestPeekMax bytes off req.Body, parses
+// the `model` field, and restores req.Body so downstream handlers see
+// the full stream. Returns "" on any failure — this is best-effort
+// observability, never blocking.
+//
+// Body restoration strategy:
+//   - If the body fits in the peek → re-wrap as a bytes.Reader of the
+//     captured bytes (the original ReadCloser's tail is empty).
+//   - If the body extends past the peek → chain via io.MultiReader so
+//     the tail flows through untouched.
+func peekRequestModel(req *http.Request) string {
+	if req.Body == nil {
+		return ""
+	}
+	head, err := io.ReadAll(io.LimitReader(req.Body, int64(requestPeekMax)+1))
+	if err != nil {
+		// Restore whatever we got so the handler can still surface its
+		// own error (instead of seeing a half-drained body that confuses
+		// downstream JSON parsers).
+		req.Body = io.NopCloser(bytes.NewReader(head))
+		return ""
+	}
+	if int64(len(head)) > int64(requestPeekMax) {
+		// Body exceeds peek — preserve the tail.
+		req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(head), req.Body))
+	} else {
+		req.Body = io.NopCloser(bytes.NewReader(head))
+	}
+
+	return extractModelField(head)
+}
+
+// extractModelField walks the head incrementally with json.Decoder.Token()
+// so we can find `"model": "..."` even when the head is truncated
+// mid-body (a 60 KB embedded base64 prompt after the model field would
+// otherwise make a strict Unmarshal fail). Stops as soon as model is
+// found OR exhausts the head.
+//
+// Limitation: when the model field sits AFTER a field whose value
+// extends past the peek (large messages array deserialized first), the
+// walker can't reach it. That's an explicit trade-off — alternatives
+// would require either a tolerant tokenizer that resyncs after errors
+// (complex) or buffering the entire request body in middleware
+// (regression on memory). Most clients place `model` first.
+func extractModelField(head []byte) string {
+	dec := json.NewDecoder(bytes.NewReader(head))
+
+	open, err := dec.Token()
+	if err != nil || open != json.Delim('{') {
+		return ""
+	}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return ""
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return ""
+		}
+		if key == "model" {
+			valTok, err := dec.Token()
+			if err != nil {
+				return ""
+			}
+			s, _ := valTok.(string)
+			return strings.TrimSpace(s)
+		}
+		// Skip the value (object/array/primitive). If it extends past
+		// the head we'll error here — fine, we just couldn't find model
+		// in this request and return "" cleanly.
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return ""
+		}
+	}
+	return ""
 }
 
 // hashAPIKey returns the first 12 hex chars of SHA-256(inbound key).

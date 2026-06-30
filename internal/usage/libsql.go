@@ -48,10 +48,42 @@ func resolveDriver(dsn string) (driver, dataSource string) {
 		strings.HasPrefix(dsn, "ws://"):
 		return "libsql", dsn
 	case strings.HasPrefix(dsn, "file:"):
-		return "sqlite", dsn
+		// Force WAL + busy_timeout for concurrent reader/writer safety.
+		// The async recorder inserts records while /v1/usage queries
+		// scan the same table; without WAL mode SQLite serializes
+		// readers behind writers and a single PRAGMA busy_timeout on
+		// one connection doesn't propagate to other pool connections.
+		// Pragmas must travel in the DSN to apply per-connection.
+		return "sqlite", withConcurrencyPragmas(dsn)
 	default:
-		return "sqlite", "file:" + url.PathEscape(dsn) + "?_pragma=busy_timeout(5000)"
+		return "sqlite", withConcurrencyPragmas("file:"+url.PathEscape(dsn))
 	}
+}
+
+// withConcurrencyPragmas appends WAL + busy_timeout pragmas to a sqlite
+// file: DSN (preserving any existing ?query). modernc.org/sqlite reads
+// `_pragma=` query keys on each new connection, so this guarantees every
+// pooled connection inherits the same settings.
+func withConcurrencyPragmas(dsn string) string {
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	pragmas := "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	if strings.Contains(dsn, "_pragma=") {
+		// Caller already specified pragmas; respect them and only add
+		// what's missing.
+		out := dsn
+		if !strings.Contains(dsn, "journal_mode") {
+			out += sep + "_pragma=journal_mode(WAL)"
+			sep = "&"
+		}
+		if !strings.Contains(dsn, "busy_timeout") {
+			out += sep + "_pragma=busy_timeout(5000)"
+		}
+		return out
+	}
+	return dsn + sep + pragmas
 }
 
 // migrate uses a separate user_version table because PRAGMA user_version
